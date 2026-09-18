@@ -1,0 +1,26 @@
+# Dependencies / build
+**/node_modules/
+**/bin/
+**/obj/
+**/dist/
+**/wwwroot/
+
+# Local data
+**/uploads/
+!**/uploads/.gitkeep
+
+# Env / IDE
+.env
+.env.*
+!.env.example
+!.env.*.example
+.vs/
+.idea/
+*.user
+.DS_Store
+
+# Local secrets (Google OAuth, etc.)
+backend/appsettings.Development.json
+
+# OS
+Thumbs.db
