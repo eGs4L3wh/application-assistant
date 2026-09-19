@@ -23,6 +23,8 @@ public class MongoDbContext
     public IMongoCollection<JobApplication> Applications =>
         _database.GetCollection<JobApplication>("applications");
 
+    public IMongoDatabase Database => _database;
+
     public async Task EnsureIndexesAsync(CancellationToken ct = default)
     {
         await Users.Indexes.CreateOneAsync(

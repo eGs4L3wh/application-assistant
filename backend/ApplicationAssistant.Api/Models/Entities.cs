@@ -11,6 +11,33 @@ public class AppUser
     public string Email { get; set; } = string.Empty;
     public string DisplayName { get; set; } = string.Empty;
     public DateTimeOffset CreatedAt { get; set; }
+    public List<WorkExperience> Experience { get; set; } = [];
+    public List<EducationRecord> Education { get; set; } = [];
+}
+
+public class WorkExperience
+{
+    public Guid Id { get; set; }
+    public Guid? SourceCvId { get; set; }
+    public string Company { get; set; } = string.Empty;
+    public string Title { get; set; } = string.Empty;
+    public string? Location { get; set; }
+    public DateTime? StartDate { get; set; }
+    public DateTime? EndDate { get; set; }
+    public bool IsCurrent { get; set; }
+    public string? Description { get; set; }
+}
+
+public class EducationRecord
+{
+    public Guid Id { get; set; }
+    public Guid? SourceCvId { get; set; }
+    public string Institution { get; set; } = string.Empty;
+    public string? Degree { get; set; }
+    public string? FieldOfStudy { get; set; }
+    public DateTime? StartDate { get; set; }
+    public DateTime? EndDate { get; set; }
+    public string? Description { get; set; }
 }
 
 public class CvDocument
@@ -22,6 +49,10 @@ public class CvDocument
     public string FileName { get; set; } = string.Empty;
     public string ContentType { get; set; } = string.Empty;
     public string StoragePath { get; set; } = string.Empty;
+
+    /// <summary>Raw CV bytes stored in MongoDB.</summary>
+    public byte[] Content { get; set; } = [];
+
     public long SizeBytes { get; set; }
     public DateTimeOffset UploadedAt { get; set; }
 }

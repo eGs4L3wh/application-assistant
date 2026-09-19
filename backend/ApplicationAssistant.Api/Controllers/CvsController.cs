@@ -1,3 +1,4 @@
+using ApplicationAssistant.AI;
 using ApplicationAssistant.Api.Data;
 using ApplicationAssistant.Api.Models;
 using Microsoft.AspNetCore.Authorization;
@@ -9,7 +10,7 @@ namespace ApplicationAssistant.Api.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/cvs")]
-public class CvsController(MongoDbContext db, IWebHostEnvironment env) : ControllerBase
+public class CvsController(MongoDbContext db, IWebHostEnvironment env, ICvParser cvParser) : ControllerBase
 {
     private static readonly HashSet<string> AllowedContentTypes =
     [
@@ -29,14 +30,7 @@ public class CvsController(MongoDbContext db, IWebHostEnvironment env) : Control
             .SortByDescending(c => c.UploadedAt)
             .ToListAsync(ct);
 
-        return Ok(items.Select(c => new
-        {
-            c.Id,
-            c.FileName,
-            c.ContentType,
-            c.SizeBytes,
-            c.UploadedAt
-        }));
+        return Ok(items.Select(ToCvResponse));
     }
 
     [HttpPost]
@@ -59,40 +53,77 @@ public class CvsController(MongoDbContext db, IWebHostEnvironment env) : Control
             return BadRequest(new { error = "Only PDF or Word documents are allowed." });
         }
 
+        await using var memory = new MemoryStream();
+        await file.CopyToAsync(memory, ct);
+        var bytes = memory.ToArray();
+
+        var contentType = string.IsNullOrWhiteSpace(file.ContentType)
+            ? "application/octet-stream"
+            : file.ContentType;
+        var fileName = Path.GetFileName(file.FileName);
+
+        CvParseResult parsed;
+        try
+        {
+            parsed = await cvParser.ParseAsync(bytes, contentType, fileName, ct);
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(StatusCodes.Status502BadGateway, new
+            {
+                error = "Failed to parse CV with AI.",
+                detail = ex.Message,
+                inner = ex.InnerException?.Message
+            });
+        }
+
         var uploadsRoot = Path.Combine(env.ContentRootPath, "uploads", userId.Value.ToString());
         Directory.CreateDirectory(uploadsRoot);
 
         var storedName = $"{Guid.NewGuid():N}{Path.GetExtension(file.FileName)}";
         var fullPath = Path.Combine(uploadsRoot, storedName);
+        await System.IO.File.WriteAllBytesAsync(fullPath, bytes, ct);
 
-        await using (var stream = System.IO.File.Create(fullPath))
-        {
-            await file.CopyToAsync(stream, ct);
-        }
-
+        var cvId = Guid.NewGuid();
         var cv = new CvDocument
         {
-            Id = Guid.NewGuid(),
+            Id = cvId,
             UserId = userId.Value,
-            FileName = Path.GetFileName(file.FileName),
-            ContentType = string.IsNullOrWhiteSpace(file.ContentType)
-                ? "application/octet-stream"
-                : file.ContentType,
+            FileName = fileName,
+            ContentType = contentType,
             StoragePath = Path.Combine("uploads", userId.Value.ToString(), storedName)
                 .Replace('\\', '/'),
-            SizeBytes = file.Length,
+            Content = bytes,
+            SizeBytes = bytes.LongLength,
             UploadedAt = DateTimeOffset.UtcNow
         };
 
-        await db.Cvs.InsertOneAsync(cv, cancellationToken: ct);
-
-        return CreatedAtAction(nameof(List), new
+        var user = await db.Users.Find(u => u.Id == userId.Value).FirstOrDefaultAsync(ct);
+        if (user is null)
         {
-            cv.Id,
-            cv.FileName,
-            cv.ContentType,
-            cv.SizeBytes,
-            cv.UploadedAt
-        });
+            return NotFound(new { error = "User profile not found." });
+        }
+
+        var experience = ProfileMerge.MergeExperience(user.Experience, parsed.Experiences, cvId);
+        var education = ProfileMerge.MergeEducation(user.Education, parsed.Education, cvId);
+
+        await db.Cvs.InsertOneAsync(cv, cancellationToken: ct);
+        await db.Users.UpdateOneAsync(
+            u => u.Id == userId.Value,
+            Builders<AppUser>.Update
+                .Set(u => u.Experience, experience)
+                .Set(u => u.Education, education),
+            cancellationToken: ct);
+
+        return CreatedAtAction(nameof(List), ToCvResponse(cv));
     }
+
+    private static object ToCvResponse(CvDocument cv) => new
+    {
+        cv.Id,
+        cv.FileName,
+        cv.ContentType,
+        cv.SizeBytes,
+        cv.UploadedAt
+    };
 }

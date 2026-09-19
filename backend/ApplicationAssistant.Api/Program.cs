@@ -1,10 +1,30 @@
 using System.Security.Claims;
+using ApplicationAssistant.AI;
+using ApplicationAssistant.Api;
 using ApplicationAssistant.Api.Data;
 using ApplicationAssistant.Api.Models;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.Google;
 using Microsoft.Extensions.FileProviders;
+using MongoDB.Bson;
+using MongoDB.Bson.Serialization;
+using MongoDB.Bson.Serialization.Serializers;
 using MongoDB.Driver;
+
+BsonSerializer.RegisterSerializer(new GuidSerializer(GuidRepresentation.Standard));
+
+if (args.Any(a => string.Equals(a, "migrate-dates", StringComparison.OrdinalIgnoreCase)))
+{
+    var migrateBuilder = WebApplication.CreateBuilder(args);
+    migrateBuilder.Services.AddSingleton<MongoDbContext>();
+    await using var migrateApp = migrateBuilder.Build();
+    var mongo = migrateApp.Services.GetRequiredService<MongoDbContext>();
+    Console.WriteLine("Running profile date migration…");
+    var result = await ProfileDateMigration.RunAsync(mongo.Database);
+    Console.WriteLine(
+        $"Done. Users updated: {result.UsersTouched}, fields converted: {result.FieldsConverted}, failed: {result.FieldsFailed}");
+    return;
+}
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -14,6 +34,8 @@ var googleClientSecret = builder.Configuration["Authentication:Google:ClientSecr
 var isProduction = builder.Environment.IsProduction();
 
 builder.Services.AddSingleton<MongoDbContext>();
+builder.Services.AddSingleton<CvPdfRenderer>();
+builder.Services.AddApplicationAssistantAi();
 
 builder.Services.AddAuthentication(options =>
     {

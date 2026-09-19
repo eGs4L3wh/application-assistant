@@ -1,3 +1,5 @@
+using System.Text.RegularExpressions;
+using ApplicationAssistant.AI;
 using ApplicationAssistant.Api.Data;
 using ApplicationAssistant.Api.Models;
 using Microsoft.AspNetCore.Authorization;
@@ -8,12 +10,94 @@ namespace ApplicationAssistant.Api.Controllers;
 
 public record CreateApplicationRequest(string Company, string RoleTitle, string? Notes, Guid? CvId);
 public record UpdateApplicationRequest(string? Company, string? RoleTitle, string? Status, string? Notes, Guid? CvId);
+public record GenerateCvRequest(string JobAd, string? Company, string? RoleTitle);
 
 [ApiController]
 [Authorize]
 [Route("api/applications")]
-public class ApplicationsController(MongoDbContext db) : ControllerBase
+public class ApplicationsController(MongoDbContext db, ICvGenerator cvGenerator, CvPdfRenderer pdfRenderer) : ControllerBase
 {
+    [HttpPost("generate-cv")]
+    public async Task<IActionResult> GenerateCv([FromBody] GenerateCvRequest request, CancellationToken ct)
+    {
+        var userId = User.GetAppUserId();
+        if (userId is null) return Unauthorized();
+
+        if (string.IsNullOrWhiteSpace(request.JobAd))
+        {
+            return BadRequest(new { error = "Job ad is required." });
+        }
+
+        var user = await db.Users.Find(u => u.Id == userId).FirstOrDefaultAsync(ct);
+        if (user is null) return Unauthorized();
+
+        if (user.Experience.Count == 0 && user.Education.Count == 0)
+        {
+            return BadRequest(new { error = "Add experience or education to your profile before generating a CV." });
+        }
+
+        var fullName = string.IsNullOrWhiteSpace(user.DisplayName) ? user.Email : user.DisplayName;
+        var draft = await cvGenerator.GenerateAsync(new CvGenerationRequest
+        {
+            JobAd = request.JobAd.Trim(),
+            TargetCompany = string.IsNullOrWhiteSpace(request.Company) ? null : request.Company.Trim(),
+            TargetRoleTitle = string.IsNullOrWhiteSpace(request.RoleTitle) ? null : request.RoleTitle.Trim(),
+            FullName = fullName,
+            Email = user.Email,
+            Experiences = user.Experience.Select(e => new CvSourceExperience
+            {
+                Id = e.Id,
+                Company = e.Company,
+                Title = e.Title,
+                Location = e.Location,
+                StartDate = e.StartDate,
+                EndDate = e.EndDate,
+                IsCurrent = e.IsCurrent,
+                Description = e.Description
+            }).ToList(),
+            Education = user.Education.Select(e => new CvSourceEducation
+            {
+                Id = e.Id,
+                Institution = e.Institution,
+                Degree = e.Degree,
+                FieldOfStudy = e.FieldOfStudy,
+                StartDate = e.StartDate,
+                EndDate = e.EndDate,
+                Description = e.Description
+            }).ToList()
+        }, ct);
+
+        var aligned = ExperienceAligner.Align(user.Experience, draft.Experiences);
+        var educationById = user.Education.ToDictionary(e => e.Id);
+        var educationForPdf = draft.Education
+            .Where(e => e.Include && educationById.ContainsKey(e.Id))
+            .Select(e => (educationById[e.Id], e))
+            .OrderByDescending(pair => pair.Item1.EndDate ?? pair.Item1.StartDate ?? DateTime.MinValue)
+            .ToList();
+
+        var pdfBytes = pdfRenderer.Render(
+            fullName,
+            user.Email,
+            request.RoleTitle,
+            request.Company,
+            draft,
+            aligned,
+            educationForPdf);
+
+        var fileLabel = SanitizeFilePart(request.Company)
+            ?? SanitizeFilePart(request.RoleTitle)
+            ?? "tailored";
+        return File(pdfBytes, "application/pdf", $"cv-{fileLabel}.pdf");
+    }
+
+    private static string? SanitizeFilePart(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        var cleaned = Regex.Replace(value.Trim().ToLowerInvariant(), @"[^a-z0-9]+", "-");
+        cleaned = cleaned.Trim('-');
+        return string.IsNullOrEmpty(cleaned) ? null : cleaned[..Math.Min(cleaned.Length, 40)];
+    }
+
     [HttpGet]
     public async Task<ActionResult<IEnumerable<object>>> List(CancellationToken ct)
     {
