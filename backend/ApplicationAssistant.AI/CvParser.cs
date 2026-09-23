@@ -9,9 +9,11 @@ public sealed class CvParser(ILLMService llm) : ICvParser
 {
     private const string SystemPrompt = """
         You extract structured career data from CVs.
-        Return only job experience and education records that appear in the document.
+        Extract contact email and phone when they appear on the CV (header/footer or contact section). Leave them empty if absent or unclear.
+        Also return job experience and education records that appear in the document.
         Use empty strings for unknown fields. Prefer concise descriptions.
         Dates may be free-form strings as written on the CV (e.g. "Jan 2020", "2018", "Present").
+        For each experience, set engagementType to "Permanent" or "Contract" when the CV indicates it (e.g. contractor, freelance, fixed-term, permanent employee). Leave engagementType empty when unclear.
         """;
 
     public async Task<CvParseResult> ParseAsync(
@@ -30,6 +32,8 @@ public sealed class CvParser(ILLMService llm) : ICvParser
 
         var sample = new CvParseResult
         {
+            Email = "candidate@example.com",
+            Phone = "+44 7700 900123",
             Experiences =
             [
                 new ParsedWorkExperience
@@ -40,6 +44,7 @@ public sealed class CvParser(ILLMService llm) : ICvParser
                     StartDate = "Jan 2020",
                     EndDate = "Dec 2022",
                     IsCurrent = false,
+                    EngagementType = "Permanent",
                     Description = "Built APIs and web apps."
                 }
             ],
@@ -78,6 +83,8 @@ public sealed class CvParser(ILLMService llm) : ICvParser
         parsed.Education = parsed.Education
             .Where(e => !string.IsNullOrWhiteSpace(e.Institution))
             .ToList();
+        parsed.Email = string.IsNullOrWhiteSpace(parsed.Email) ? null : parsed.Email.Trim();
+        parsed.Phone = string.IsNullOrWhiteSpace(parsed.Phone) ? null : parsed.Phone.Trim();
 
         return parsed;
     }

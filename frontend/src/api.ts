@@ -28,6 +28,34 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
+async function requestPdf(path: string, init?: RequestInit): Promise<{ blob: Blob; fileName: string }> {
+  const response = await fetch(`${API_BASE}${path}`, {
+    credentials: "include",
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      ...init?.headers
+    }
+  });
+
+  if (!response.ok) {
+    let message = `Request failed (${response.status})`;
+    try {
+      const data = (await response.json()) as { error?: string };
+      if (data.error) message = data.error;
+    } catch {
+      /* ignore */
+    }
+    throw new Error(message);
+  }
+
+  const disposition = response.headers.get("Content-Disposition") ?? "";
+  const match = /filename="?([^";]+)"?/i.exec(disposition);
+  const fileName = match?.[1] || "cv_download.pdf";
+  const blob = await response.blob();
+  return { blob, fileName };
+}
+
 export type User = {
   id: string;
   email: string;
@@ -42,6 +70,10 @@ export type CvItem = {
   uploadedAt: string;
 };
 
+export type EngagementType = "Permanent" | "Contract";
+
+export const ENGAGEMENT_TYPES: EngagementType[] = ["Permanent", "Contract"];
+
 export type WorkExperience = {
   id: string;
   sourceCvId?: string | null;
@@ -51,6 +83,7 @@ export type WorkExperience = {
   startDate?: string | null;
   endDate?: string | null;
   isCurrent: boolean;
+  engagementType: EngagementType | string;
   description?: string | null;
 };
 
@@ -66,6 +99,8 @@ export type EducationRecord = {
 };
 
 export type Profile = {
+  email: string;
+  phone: string;
   experience: WorkExperience[];
   education: EducationRecord[];
 };
@@ -78,8 +113,42 @@ export type ApplicationItem = {
   notes?: string | null;
   cvId?: string | null;
   cvFileName?: string | null;
+  hasGeneratedCv?: boolean;
   createdAt: string;
   updatedAt: string;
+};
+
+export type DraftExperience = {
+  id: string;
+  include: boolean;
+  relevanceScore: number;
+  company: string;
+  title: string;
+  location?: string | null;
+  startDate?: string | null;
+  endDate?: string | null;
+  isCurrent: boolean;
+  engagementType: EngagementType | string;
+  description?: string | null;
+};
+
+export type DraftEducation = {
+  id: string;
+  include: boolean;
+  institution: string;
+  degree?: string | null;
+  fieldOfStudy?: string | null;
+  startDate?: string | null;
+  endDate?: string | null;
+  description?: string | null;
+};
+
+export type ApplicationDetail = ApplicationItem & {
+  jobAd?: string | null;
+  summary?: string | null;
+  skills: string[];
+  experiences: DraftExperience[];
+  education: DraftEducation[];
 };
 
 export type ExperienceInput = {
@@ -89,6 +158,7 @@ export type ExperienceInput = {
   startDate?: string | null;
   endDate?: string | null;
   isCurrent: boolean;
+  engagementType: EngagementType | string;
   description?: string | null;
 };
 
@@ -101,10 +171,24 @@ export type EducationInput = {
   description?: string | null;
 };
 
+export type UpdateDraftPayload = {
+  company?: string;
+  roleTitle?: string;
+  summary?: string;
+  skills?: string[];
+  experiences?: DraftExperience[];
+  education?: DraftEducation[];
+};
+
 export const api = {
   me: () => request<User>("/api/auth/me"),
   logout: () => request<{ ok: boolean }>("/api/auth/logout", { method: "POST" }),
   getProfile: () => request<Profile>("/api/profile"),
+  updateContact: (payload: { email: string; phone: string }) =>
+    request<{ email: string; phone: string }>("/api/profile/contact", {
+      method: "PUT",
+      body: JSON.stringify(payload)
+    }),
   createExperience: (payload: ExperienceInput) =>
     request<WorkExperience>("/api/profile/experience", {
       method: "POST",
@@ -136,45 +220,27 @@ export const api = {
     return request<CvItem>("/api/cvs", { method: "POST", body });
   },
   listApplications: () => request<ApplicationItem[]>("/api/applications"),
-  createApplication: (payload: {
-    company: string;
-    roleTitle: string;
-    notes?: string;
-    cvId?: string;
-  }) =>
-    request<ApplicationItem>("/api/applications", {
+  getApplication: (id: string) => request<ApplicationDetail>(`/api/applications/${id}`),
+  previewApplication: (jobAd: string) =>
+    request<ApplicationDetail>("/api/applications", {
       method: "POST",
+      body: JSON.stringify({ jobAd })
+    }),
+  updateApplicationDraft: (id: string, payload: UpdateDraftPayload) =>
+    request<ApplicationDetail>(`/api/applications/${id}`, {
+      method: "PATCH",
       body: JSON.stringify(payload)
     }),
-  generateCv: async (payload: {
-    jobAd: string;
-    company?: string;
-    roleTitle?: string;
-  }): Promise<{ blob: Blob; fileName: string }> => {
-    const response = await fetch(`${API_BASE}/api/applications/generate-cv`, {
+  refineExperience: (applicationId: string, experienceId: string, prompt: string) =>
+    request<DraftExperience>(`/api/applications/${applicationId}/experiences/${experienceId}`, {
       method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    });
-
-    if (!response.ok) {
-      let message = `Request failed (${response.status})`;
-      try {
-        const data = (await response.json()) as { error?: string };
-        if (data.error) message = data.error;
-      } catch {
-        /* ignore */
-      }
-      throw new Error(message);
-    }
-
-    const disposition = response.headers.get("Content-Disposition") ?? "";
-    const match = /filename="?([^";]+)"?/i.exec(disposition);
-    const fileName = match?.[1] || "cv-tailored.pdf";
-    const blob = await response.blob();
-    return { blob, fileName };
-  },
+      body: JSON.stringify({ prompt })
+    }),
+  finalizeApplication: (id: string) =>
+    requestPdf(`/api/applications/${id}`, { method: "POST", body: "{}" }),
+  downloadApplicationCv: (id: string) => requestPdf(`/api/applications/${id}/cv`),
+  deleteApplication: (id: string) =>
+    request<void>(`/api/applications/${id}`, { method: "DELETE" }),
   loginUrl: () => {
     const returnUrl = encodeURIComponent(window.location.origin);
     return `${API_BASE}/api/auth/login?returnUrl=${returnUrl}`;

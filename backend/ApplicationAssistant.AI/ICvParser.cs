@@ -11,6 +11,8 @@ public interface ICvParser
 
 public sealed class CvParseResult
 {
+    public string? Email { get; set; }
+    public string? Phone { get; set; }
     public List<ParsedWorkExperience> Experiences { get; set; } = [];
     public List<ParsedEducation> Education { get; set; } = [];
 }
@@ -23,6 +25,8 @@ public sealed class ParsedWorkExperience
     public string? StartDate { get; set; }
     public string? EndDate { get; set; }
     public bool IsCurrent { get; set; }
+    /// <summary>Permanent or Contract when known from the CV; empty if unclear.</summary>
+    public string? EngagementType { get; set; }
     public string? Description { get; set; }
 }
 

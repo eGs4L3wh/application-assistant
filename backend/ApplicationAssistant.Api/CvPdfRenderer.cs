@@ -1,6 +1,5 @@
 using System.Globalization;
 using ApplicationAssistant.AI;
-using ApplicationAssistant.Api.Models;
 using QuestPDF.Fluent;
 using QuestPDF.Helpers;
 using QuestPDF.Infrastructure;
@@ -17,11 +16,10 @@ public sealed class CvPdfRenderer
     public byte[] Render(
         string fullName,
         string email,
-        string? targetRoleTitle,
-        string? targetCompany,
+        string? phone,
         CvDraft draft,
-        IReadOnlyList<ExperienceAligner.AlignedExperience> experiences,
-        IReadOnlyList<(EducationRecord Source, CvDraftEducation Draft)> education)
+        IReadOnlyList<CvDraftExperience> experiences,
+        IReadOnlyList<CvDraftEducation> education)
     {
         var document = Document.Create(container =>
         {
@@ -42,18 +40,22 @@ public sealed class CvPdfRenderer
                             .SemiBold()
                             .FontColor(Colors.BlueGrey.Darken4);
 
-                        col.Item().PaddingTop(2).Text(email)
-                            .FontSize(9)
-                            .FontColor(Colors.Grey.Darken1);
-
-                        if (!string.IsNullOrWhiteSpace(targetRoleTitle) || !string.IsNullOrWhiteSpace(targetCompany))
+                        var contactParts = new List<string>();
+                        if (!string.IsNullOrWhiteSpace(email))
                         {
-                            var target = string.Join(" · ", new[] { targetRoleTitle, targetCompany }
-                                .Where(s => !string.IsNullOrWhiteSpace(s)));
-                            col.Item().PaddingTop(4).Text(target)
+                            contactParts.Add(email.Trim());
+                        }
+
+                        if (!string.IsNullOrWhiteSpace(phone))
+                        {
+                            contactParts.Add(phone.Trim());
+                        }
+
+                        if (contactParts.Count > 0)
+                        {
+                            col.Item().PaddingTop(2).Text(string.Join("  ·  ", contactParts))
                                 .FontSize(9)
-                                .Italic()
-                                .FontColor(Colors.BlueGrey.Darken2);
+                                .FontColor(Colors.Grey.Darken1);
                         }
 
                         col.Item().PaddingTop(8).LineHorizontal(1).LineColor(Colors.BlueGrey.Lighten2);
@@ -82,9 +84,9 @@ public sealed class CvPdfRenderer
                     if (education.Count > 0)
                     {
                         col.Item().Element(e => SectionTitle(e, "Education"));
-                        foreach (var (source, eduDraft) in education)
+                        foreach (var edu in education)
                         {
-                            col.Item().Element(item => RenderEducation(item, source, eduDraft));
+                            col.Item().Element(item => RenderEducation(item, edu));
                         }
                     }
 
@@ -117,7 +119,7 @@ public sealed class CvPdfRenderer
             .FontColor(Colors.BlueGrey.Darken3);
     }
 
-    private static void RenderExperience(IContainer container, ExperienceAligner.AlignedExperience exp)
+    private static void RenderExperience(IContainer container, CvDraftExperience exp)
     {
         container.PaddingBottom(6).Column(col =>
         {
@@ -141,18 +143,19 @@ public sealed class CvPdfRenderer
                 col.Item().Text(exp.Location!).FontSize(8.5f).FontColor(Colors.Grey.Darken1);
             }
 
-            foreach (var bullet in exp.Bullets.Take(5))
+            if (!string.IsNullOrWhiteSpace(exp.EngagementType))
             {
-                col.Item().PaddingLeft(6).PaddingTop(1).Row(row =>
-                {
-                    row.ConstantItem(10).Text("•").FontSize(9);
-                    row.RelativeItem().Text(bullet).FontSize(9.5f);
-                });
+                col.Item().Text(exp.EngagementType).FontSize(8.5f).FontColor(Colors.Grey.Darken1);
+            }
+
+            if (!string.IsNullOrWhiteSpace(exp.Description))
+            {
+                col.Item().PaddingTop(2).Text(exp.Description!).FontSize(9.5f);
             }
         });
     }
 
-    private static void RenderEducation(IContainer container, EducationRecord source, CvDraftEducation draft)
+    private static void RenderEducation(IContainer container, CvDraftEducation draft)
     {
         container.PaddingBottom(4).Column(col =>
         {
@@ -169,7 +172,7 @@ public sealed class CvPdfRenderer
                         text.Span($"  ·  {degree}").FontSize(10);
                     }
                 });
-                row.ConstantItem(110).AlignRight().Text(FormatRange(source.StartDate, source.EndDate, isCurrent: false))
+                row.ConstantItem(110).AlignRight().Text(FormatRange(draft.StartDate, draft.EndDate, isCurrent: false))
                     .FontSize(8.5f)
                     .FontColor(Colors.Grey.Darken1);
             });

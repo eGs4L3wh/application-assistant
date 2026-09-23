@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using GenerativeAI;
 using GenerativeAI.Types;
@@ -76,15 +77,108 @@ public class GeminiLLMService : ILLMService
         return response.Text.Trim();
     }
 
-    private static T DeserializeResponse<T>(string responseText)
-    {
-        var cleaned = responseText
+    private static string CleanJsonResponse(string responseText) =>
+        responseText
             .Replace("```json", string.Empty, StringComparison.OrdinalIgnoreCase)
             .Replace("```", string.Empty, StringComparison.Ordinal)
             .Trim();
 
+    private static T DeserializeResponse<T>(string responseText)
+    {
+        var cleaned = CleanJsonResponse(responseText);
         return JsonSerializer.Deserialize<T>(cleaned, JsonOptions)
             ?? throw new Exception("Gemini returned JSON that deserialized to null.");
+    }
+
+    /// <summary>
+    /// Closes open strings / arrays / objects when the model truncates mid-JSON.
+    /// </summary>
+    internal static string TryRepairTruncatedJson(string json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return json;
+        }
+
+        var inString = false;
+        var escape = false;
+        var stack = new Stack<char>();
+
+        foreach (var c in json)
+        {
+            if (inString)
+            {
+                if (escape)
+                {
+                    escape = false;
+                    continue;
+                }
+
+                if (c == '\\')
+                {
+                    escape = true;
+                    continue;
+                }
+
+                if (c == '"')
+                {
+                    inString = false;
+                }
+
+                continue;
+            }
+
+            switch (c)
+            {
+                case '"':
+                    inString = true;
+                    break;
+                case '{':
+                case '[':
+                    stack.Push(c);
+                    break;
+                case '}':
+                case ']':
+                    if (stack.Count > 0)
+                    {
+                        stack.Pop();
+                    }
+
+                    break;
+            }
+        }
+
+        var sb = new StringBuilder(json);
+
+        if (inString)
+        {
+            // Drop a trailing unfinished escape so the closing quote is valid.
+            if (sb.Length > 0 && sb[^1] == '\\')
+            {
+                sb.Length--;
+            }
+
+            sb.Append('"');
+        }
+
+        while (sb.Length > 0)
+        {
+            var last = sb[^1];
+            if (last is ',' or ':' || char.IsWhiteSpace(last))
+            {
+                sb.Length--;
+                continue;
+            }
+
+            break;
+        }
+
+        while (stack.Count > 0)
+        {
+            sb.Append(stack.Pop() == '{' ? '}' : ']');
+        }
+
+        return sb.ToString();
     }
 
     public async Task<string> GetResponseAsync(string prompt, IEnumerable<InputItem> inputHistory, decimal? temperature = 0.5m, int maxTokens = 8192)
@@ -183,36 +277,78 @@ public class GeminiLLMService : ILLMService
 
         try
         {
-            var client = new GoogleAi(GetApiKey());
-            var googleModel = client.CreateGenerativeModel("models/gemini-2.5-flash");
-            var response = await googleModel.GenerateContentAsync(new GenerateContentRequest
-            {
-                SystemInstruction = new Content { Parts = [new Part($"{prompt}\n\n{systemSuffix}")] },
-                Contents = ToContents(inputHistory),
-                GenerationConfig = new GenerationConfig
-                {
-                    Temperature = (float?)temperature,
-                    MaxOutputTokens = maxTokens,
-                    ResponseMimeType = "application/json"
-                }
-            });
-
-            var responseText = ReadText(response);
-            try
+            var responseText = await GenerateJsonAsync(prompt, systemSuffix, inputHistory, temperature, maxTokens);
+            if (TryDeserializeResponse<T>(responseText, out var value))
             {
                 _logger.LogTrace("GetResponseAsync<{Type}> (sample): returned ({Length} chars)", typeof(T).Name, responseText.Length);
-                return DeserializeResponse<T>(responseText);
+                return value!;
             }
-            catch (Exception ex)
+
+            if (maxTokens < 65536)
             {
-                _logger.LogError(ex, "Failed to deserialize response: {Response}", responseText);
-                throw;
+                _logger.LogWarning(
+                    "JSON deserialize failed ({Length} chars); retrying with more output tokens. Preview: {Preview}",
+                    responseText.Length,
+                    responseText.Length > 400 ? responseText[^400..] : responseText);
+
+                var retryText = await GenerateJsonAsync(prompt, systemSuffix, inputHistory, temperature, 65536);
+                if (TryDeserializeResponse<T>(retryText, out value))
+                {
+                    _logger.LogTrace("GetResponseAsync<{Type}> (sample retry): returned ({Length} chars)", typeof(T).Name, retryText.Length);
+                    return value!;
+                }
+
+                responseText = retryText;
             }
+
+            // Last resort: repair truncated JSON (may drop trailing experiences).
+            var repaired = TryRepairTruncatedJson(CleanJsonResponse(responseText));
+            _logger.LogWarning("Applying truncated-JSON repair ({OriginalLength} → {RepairedLength} chars)", responseText.Length, repaired.Length);
+            return JsonSerializer.Deserialize<T>(repaired, JsonOptions)
+                ?? throw new Exception("Gemini returned JSON that deserialized to null.");
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "GetResponseAsync<{Type}> (sample) failed: {Message}", typeof(T).Name, ex.Message);
             throw;
         }
+    }
+
+    private static bool TryDeserializeResponse<T>(string responseText, out T? value)
+    {
+        try
+        {
+            value = DeserializeResponse<T>(responseText);
+            return true;
+        }
+        catch (JsonException)
+        {
+            value = default;
+            return false;
+        }
+    }
+
+    private async Task<string> GenerateJsonAsync(
+        string prompt,
+        string systemSuffix,
+        IEnumerable<InputItem> inputHistory,
+        decimal? temperature,
+        int maxTokens)
+    {
+        var client = new GoogleAi(GetApiKey());
+        var googleModel = client.CreateGenerativeModel("models/gemini-2.5-flash");
+        var response = await googleModel.GenerateContentAsync(new GenerateContentRequest
+        {
+            SystemInstruction = new Content { Parts = [new Part($"{prompt}\n\n{systemSuffix}")] },
+            Contents = ToContents(inputHistory),
+            GenerationConfig = new GenerationConfig
+            {
+                Temperature = (float?)temperature,
+                MaxOutputTokens = maxTokens,
+                ResponseMimeType = "application/json"
+            }
+        });
+
+        return ReadText(response);
     }
 }

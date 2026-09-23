@@ -107,12 +107,24 @@ public class CvsController(MongoDbContext db, IWebHostEnvironment env, ICvParser
         var experience = ProfileMerge.MergeExperience(user.Experience, parsed.Experiences, cvId);
         var education = ProfileMerge.MergeEducation(user.Education, parsed.Education, cvId);
 
+        var update = Builders<AppUser>.Update
+            .Set(u => u.Experience, experience)
+            .Set(u => u.Education, education);
+
+        if (!string.IsNullOrWhiteSpace(parsed.Email))
+        {
+            update = update.Set(u => u.ContactEmail, parsed.Email.Trim());
+        }
+
+        if (!string.IsNullOrWhiteSpace(parsed.Phone))
+        {
+            update = update.Set(u => u.Phone, parsed.Phone.Trim());
+        }
+
         await db.Cvs.InsertOneAsync(cv, cancellationToken: ct);
         await db.Users.UpdateOneAsync(
             u => u.Id == userId.Value,
-            Builders<AppUser>.Update
-                .Set(u => u.Experience, experience)
-                .Set(u => u.Education, education),
+            update,
             cancellationToken: ct);
 
         return CreatedAtAction(nameof(List), ToCvResponse(cv));

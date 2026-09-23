@@ -13,6 +13,7 @@ public record UpsertExperienceRequest(
     string? StartDate,
     string? EndDate,
     bool IsCurrent,
+    string? EngagementType,
     string? Description);
 
 public record UpsertEducationRequest(
@@ -22,6 +23,8 @@ public record UpsertEducationRequest(
     string? StartDate,
     string? EndDate,
     string? Description);
+
+public record UpdateContactRequest(string? Email, string? Phone);
 
 [ApiController]
 [Authorize]
@@ -39,9 +42,35 @@ public class ProfileController(MongoDbContext db) : ControllerBase
 
         return Ok(new
         {
+            email = user.GetCvEmail(),
+            phone = user.Phone ?? string.Empty,
             experience = ProfileMerge.OrderExperience(user.Experience).Select(ToExperienceResponse),
             education = ProfileMerge.OrderEducation(user.Education).Select(ToEducationResponse)
         });
+    }
+
+    [HttpPut("contact")]
+    public async Task<ActionResult<object>> UpdateContact(
+        [FromBody] UpdateContactRequest request,
+        CancellationToken ct)
+    {
+        var userId = User.GetAppUserId();
+        if (userId is null) return Unauthorized();
+
+        var user = await db.Users.Find(u => u.Id == userId).FirstOrDefaultAsync(ct);
+        if (user is null) return NotFound(new { error = "User profile not found." });
+
+        var email = NullIfWhiteSpace(request.Email) ?? string.Empty;
+        var phone = NullIfWhiteSpace(request.Phone) ?? string.Empty;
+
+        await db.Users.UpdateOneAsync(
+            u => u.Id == userId.Value,
+            Builders<AppUser>.Update
+                .Set(u => u.ContactEmail, email)
+                .Set(u => u.Phone, phone),
+            cancellationToken: ct);
+
+        return Ok(new { email = string.IsNullOrWhiteSpace(email) ? user.Email : email, phone });
     }
 
     [HttpPost("experience")]
@@ -71,6 +100,7 @@ public class ProfileController(MongoDbContext db) : ControllerBase
             StartDate = CvDateParser.Parse(request.StartDate),
             EndDate = isCurrent ? null : CvDateParser.Parse(request.EndDate),
             IsCurrent = isCurrent,
+            EngagementType = EngagementType.Normalize(request.EngagementType),
             Description = NullIfWhiteSpace(request.Description)
         };
 
@@ -108,6 +138,7 @@ public class ProfileController(MongoDbContext db) : ControllerBase
         entry.StartDate = CvDateParser.Parse(request.StartDate);
         entry.IsCurrent = isCurrent;
         entry.EndDate = isCurrent ? null : CvDateParser.Parse(request.EndDate);
+        entry.EngagementType = EngagementType.Normalize(request.EngagementType);
         entry.Description = NullIfWhiteSpace(request.Description);
 
         user.Experience = ProfileMerge.OrderExperience(user.Experience);
@@ -224,6 +255,7 @@ public class ProfileController(MongoDbContext db) : ControllerBase
         StartDate = e.StartDate?.ToUniversalTime().ToString("O"),
         EndDate = e.EndDate?.ToUniversalTime().ToString("O"),
         e.IsCurrent,
+        e.EngagementType,
         e.Description
     };
 

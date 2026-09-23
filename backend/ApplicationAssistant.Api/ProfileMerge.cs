@@ -29,6 +29,7 @@ public static partial class ProfileMerge
                     StartDate = CvDateParser.Parse(item.StartDate),
                     EndDate = isCurrent ? null : CvDateParser.Parse(item.EndDate),
                     IsCurrent = isCurrent,
+                    EngagementType = EngagementType.Normalize(item.EngagementType),
                     Description = NullIfWhiteSpace(item.Description)
                 });
                 continue;
@@ -43,6 +44,10 @@ public static partial class ProfileMerge
             match.EndDate = match.IsCurrent
                 ? null
                 : PreferDate(CvDateParser.Parse(item.EndDate), match.EndDate);
+            if (!string.IsNullOrWhiteSpace(item.EngagementType))
+            {
+                match.EngagementType = EngagementType.Normalize(item.EngagementType);
+            }
             match.Description = PreferOptional(item.Description, match.Description);
         }
 
@@ -201,6 +206,14 @@ public static partial class ProfileMerge
             match.Description = PreferOptional(item.Description, match.Description);
             match.Title = PreferRequired(item.Title, match.Title);
             match.Company = PreferRequired(item.Company, match.Company);
+            if (!string.IsNullOrWhiteSpace(item.EngagementType))
+            {
+                match.EngagementType = EngagementType.Normalize(item.EngagementType);
+            }
+            else if (string.IsNullOrWhiteSpace(match.EngagementType))
+            {
+                match.EngagementType = EngagementType.Permanent;
+            }
         }
 
         return result;
