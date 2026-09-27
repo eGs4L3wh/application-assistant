@@ -36,6 +36,8 @@ public class WorkExperience
     /// <summary>e.g. Permanent, Contract. See <see cref="EngagementType"/>.</summary>
     public string EngagementType { get; set; } = Models.EngagementType.Permanent;
     public string? Description { get; set; }
+    /// <summary>Skill tags for this role (languages, cloud, tools, etc.).</summary>
+    public List<string> Skills { get; set; } = [];
 }
 
 public class EducationRecord
@@ -103,6 +105,8 @@ public class ApplicationDraftExperience
     public bool IsCurrent { get; set; }
     public string EngagementType { get; set; } = Models.EngagementType.Permanent;
     public string? Description { get; set; }
+    /// <summary>Skill tags for this role (languages, cloud, tools, etc.).</summary>
+    public List<string> Skills { get; set; } = [];
 }
 
 public class ApplicationDraftEducation

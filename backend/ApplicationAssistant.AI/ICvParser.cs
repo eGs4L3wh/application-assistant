@@ -28,6 +28,8 @@ public sealed class ParsedWorkExperience
     /// <summary>Permanent or Contract when known from the CV; empty if unclear.</summary>
     public string? EngagementType { get; set; }
     public string? Description { get; set; }
+    /// <summary>Skill tags evidenced in this role (languages, cloud, tools, etc.).</summary>
+    public List<string> Skills { get; set; } = [];
 }
 
 public sealed class ParsedEducation

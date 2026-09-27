@@ -6,26 +6,6 @@ using MongoDB.Driver;
 
 namespace ApplicationAssistant.Api.Controllers;
 
-public record UpsertExperienceRequest(
-    string Company,
-    string Title,
-    string? Location,
-    string? StartDate,
-    string? EndDate,
-    bool IsCurrent,
-    string? EngagementType,
-    string? Description);
-
-public record UpsertEducationRequest(
-    string Institution,
-    string? Degree,
-    string? FieldOfStudy,
-    string? StartDate,
-    string? EndDate,
-    string? Description);
-
-public record UpdateContactRequest(string? Email, string? Phone);
-
 [ApiController]
 [Authorize]
 [Route("api/profile")]
@@ -101,7 +81,8 @@ public class ProfileController(MongoDbContext db) : ControllerBase
             EndDate = isCurrent ? null : CvDateParser.Parse(request.EndDate),
             IsCurrent = isCurrent,
             EngagementType = EngagementType.Normalize(request.EngagementType),
-            Description = NullIfWhiteSpace(request.Description)
+            Description = NullIfWhiteSpace(request.Description),
+            Skills = NormalizeSkills(request.Skills)
         };
 
         user.Experience.Add(entry);
@@ -140,6 +121,7 @@ public class ProfileController(MongoDbContext db) : ControllerBase
         entry.EndDate = isCurrent ? null : CvDateParser.Parse(request.EndDate);
         entry.EngagementType = EngagementType.Normalize(request.EngagementType);
         entry.Description = NullIfWhiteSpace(request.Description);
+        entry.Skills = NormalizeSkills(request.Skills);
 
         user.Experience = ProfileMerge.OrderExperience(user.Experience);
         await db.Users.ReplaceOneAsync(u => u.Id == userId, user, cancellationToken: ct);
@@ -256,7 +238,8 @@ public class ProfileController(MongoDbContext db) : ControllerBase
         EndDate = e.EndDate?.ToUniversalTime().ToString("O"),
         e.IsCurrent,
         e.EngagementType,
-        e.Description
+        e.Description,
+        Skills = e.Skills ?? []
     };
 
     private static object ToEducationResponse(EducationRecord e) => new
@@ -270,6 +253,14 @@ public class ProfileController(MongoDbContext db) : ControllerBase
         EndDate = e.EndDate?.ToUniversalTime().ToString("O"),
         e.Description
     };
+
+    private static List<string> NormalizeSkills(IEnumerable<string>? skills) =>
+        (skills ?? [])
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Select(s => s.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(20)
+            .ToList();
 
     private static string? NullIfWhiteSpace(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();

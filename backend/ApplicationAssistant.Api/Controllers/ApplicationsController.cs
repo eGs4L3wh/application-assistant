@@ -7,40 +7,6 @@ using MongoDB.Driver;
 
 namespace ApplicationAssistant.Api.Controllers;
 
-public record CreateApplicationRequest(string JobAd);
-public record DraftExperienceUpdate(
-    Guid Id,
-    bool Include,
-    double RelevanceScore,
-    string Company,
-    string Title,
-    string? Location,
-    DateTime? StartDate,
-    DateTime? EndDate,
-    bool IsCurrent,
-    string? EngagementType,
-    string? Description);
-public record DraftEducationUpdate(
-    Guid Id,
-    bool Include,
-    string Institution,
-    string? Degree,
-    string? FieldOfStudy,
-    DateTime? StartDate,
-    DateTime? EndDate,
-    string? Description);
-public record UpdateApplicationRequest(
-    string? Company,
-    string? RoleTitle,
-    string? Status,
-    string? Notes,
-    Guid? CvId,
-    string? Summary,
-    List<string>? Skills,
-    List<DraftExperienceUpdate>? Experiences,
-    List<DraftEducationUpdate>? Education);
-public record RefineExperienceRequestBody(string Prompt);
-
 [ApiController]
 [Authorize]
 [Route("api/applications")]
@@ -202,6 +168,10 @@ public class ApplicationsController(MongoDbContext db, ICvGenerator cvGenerator,
                 existing.IsCurrent = update.IsCurrent;
                 existing.EngagementType = EngagementType.Normalize(update.EngagementType);
                 existing.Description = string.IsNullOrWhiteSpace(update.Description) ? null : update.Description.Trim();
+                if (update.Skills is not null)
+                {
+                    existing.Skills = NormalizeSkills(update.Skills);
+                }
             }
         }
 
@@ -293,7 +263,8 @@ public class ApplicationsController(MongoDbContext db, ICvGenerator cvGenerator,
             experience.Company,
             experience.Title,
             experience.Location,
-            experience.Description
+            experience.Description,
+            Skills = experience.Skills ?? []
         });
     }
 
@@ -435,6 +406,11 @@ public class ApplicationsController(MongoDbContext db, ICvGenerator cvGenerator,
             {
                 exp.EngagementType = EngagementType.Normalize(source.EngagementType);
             }
+
+            if (exp.Skills is not { Count: > 0 } && source.Skills is { Count: > 0 })
+            {
+                exp.Skills = source.Skills.ToList();
+            }
         }
 
         var educationById = user.Education.ToDictionary(e => e.Id);
@@ -465,7 +441,8 @@ public class ApplicationsController(MongoDbContext db, ICvGenerator cvGenerator,
         EndDate = e.EndDate,
         IsCurrent = e.IsCurrent,
         EngagementType = EngagementType.Normalize(e.EngagementType),
-        Description = e.Description
+        Description = e.Description,
+        Skills = e.Skills ?? []
     };
 
     private static CvSourceEducation ToSourceEducation(EducationRecord e) => new()
@@ -491,7 +468,8 @@ public class ApplicationsController(MongoDbContext db, ICvGenerator cvGenerator,
         EndDate = e.EndDate,
         IsCurrent = e.IsCurrent,
         EngagementType = EngagementType.Normalize(e.EngagementType),
-        Description = e.Description
+        Description = e.Description,
+        Skills = NormalizeSkills(e.Skills)
     };
 
     private static ApplicationDraftEducation ToStoredEducation(CvDraftEducation e) => new()
@@ -524,7 +502,8 @@ public class ApplicationsController(MongoDbContext db, ICvGenerator cvGenerator,
             EndDate = e.EndDate,
             IsCurrent = e.IsCurrent,
             EngagementType = EngagementType.Normalize(e.EngagementType),
-            Description = e.Description
+            Description = e.Description,
+            Skills = e.Skills ?? []
         }).ToList(),
         Education = application.DraftEducation.Select(e => new CvDraftEducation
         {
@@ -561,7 +540,8 @@ public class ApplicationsController(MongoDbContext db, ICvGenerator cvGenerator,
             e.EndDate,
             e.IsCurrent,
             EngagementType = EngagementType.Normalize(e.EngagementType),
-            e.Description
+            e.Description,
+            Skills = e.Skills ?? []
         }),
         Education = application.DraftEducation.Select(e => new
         {
@@ -580,4 +560,12 @@ public class ApplicationsController(MongoDbContext db, ICvGenerator cvGenerator,
         application.CreatedAt,
         application.UpdatedAt
     };
+
+    private static List<string> NormalizeSkills(IEnumerable<string>? skills) =>
+        (skills ?? [])
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Select(s => s.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(20)
+            .ToList();
 }

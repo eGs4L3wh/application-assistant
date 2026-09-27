@@ -26,6 +26,21 @@ if (args.Any(a => string.Equals(a, "migrate-dates", StringComparison.OrdinalIgno
     return;
 }
 
+if (args.Any(a => string.Equals(a, "extract-experience-skills", StringComparison.OrdinalIgnoreCase)))
+{
+    var migrateBuilder = WebApplication.CreateBuilder(args);
+    migrateBuilder.Services.AddSingleton<MongoDbContext>();
+    migrateBuilder.Services.AddApplicationAssistantAi();
+    await using var migrateApp = migrateBuilder.Build();
+    var mongo = migrateApp.Services.GetRequiredService<MongoDbContext>();
+    var llm = migrateApp.Services.GetRequiredService<ILLMService>();
+    Console.WriteLine("Extracting experience skill tags via Gemini…");
+    var result = await ExperienceSkillsMigration.RunAsync(mongo.Users, llm);
+    Console.WriteLine(
+        $"Done. Users updated: {result.UsersTouched}, filled: {result.ExperiencesFilled}, skipped: {result.ExperiencesSkipped}, failed: {result.ExperiencesFailed}");
+    return;
+}
+
 var builder = WebApplication.CreateBuilder(args);
 
 var frontendOrigin = builder.Configuration["Frontend:Origin"] ?? "http://localhost:5173";

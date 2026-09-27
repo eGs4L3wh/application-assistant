@@ -50,6 +50,17 @@ dotnet run -- migrate-dates
 
 Rules: `"2025"` → 1 Jan 2025, `"Jul 2025"` → 1 Jul 2025, `"Present"` → null (+ `IsCurrent` on experience).
 
+### Experience skill backfill
+
+Populate empty per-role `Skills` tags from experience descriptions (Gemini):
+
+```bash
+cd backend/ApplicationAssistant.Api
+dotnet run -- extract-experience-skills
+```
+
+Only fills experiences that already have a description and an empty skills list. Existing tags are left alone.
+
 ### 4. Frontend
 
 ```bash

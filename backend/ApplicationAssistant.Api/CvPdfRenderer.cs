@@ -148,6 +148,13 @@ public sealed class CvPdfRenderer
                 col.Item().Text(exp.EngagementType).FontSize(8.5f).FontColor(Colors.Grey.Darken1);
             }
 
+            if (exp.Skills is { Count: > 0 })
+            {
+                col.Item().PaddingTop(1).Text(string.Join(" · ", exp.Skills))
+                    .FontSize(8.5f)
+                    .FontColor(Colors.BlueGrey.Darken2);
+            }
+
             if (!string.IsNullOrWhiteSpace(exp.Description))
             {
                 col.Item().PaddingTop(2).Text(exp.Description!).FontSize(9.5f);

@@ -30,7 +30,8 @@ public static partial class ProfileMerge
                     EndDate = isCurrent ? null : CvDateParser.Parse(item.EndDate),
                     IsCurrent = isCurrent,
                     EngagementType = EngagementType.Normalize(item.EngagementType),
-                    Description = NullIfWhiteSpace(item.Description)
+                    Description = NullIfWhiteSpace(item.Description),
+                    Skills = NormalizeSkills(item.Skills)
                 });
                 continue;
             }
@@ -49,6 +50,7 @@ public static partial class ProfileMerge
                 match.EngagementType = EngagementType.Normalize(item.EngagementType);
             }
             match.Description = PreferOptional(item.Description, match.Description);
+            match.Skills = PreferSkills(item.Skills, match.Skills);
         }
 
         return OrderExperience(merged);
@@ -206,6 +208,7 @@ public static partial class ProfileMerge
             match.Description = PreferOptional(item.Description, match.Description);
             match.Title = PreferRequired(item.Title, match.Title);
             match.Company = PreferRequired(item.Company, match.Company);
+            match.Skills = PreferSkills(item.Skills, match.Skills);
             if (!string.IsNullOrWhiteSpace(item.EngagementType))
             {
                 match.EngagementType = EngagementType.Normalize(item.EngagementType);
@@ -296,6 +299,20 @@ public static partial class ProfileMerge
             : !string.IsNullOrWhiteSpace(existing)
                 ? existing.Trim()
                 : null;
+
+    private static List<string> PreferSkills(IEnumerable<string>? incoming, IEnumerable<string>? existing)
+    {
+        var fromIncoming = NormalizeSkills(incoming);
+        return fromIncoming.Count > 0 ? fromIncoming : NormalizeSkills(existing);
+    }
+
+    private static List<string> NormalizeSkills(IEnumerable<string>? skills) =>
+        (skills ?? [])
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Select(s => s.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(20)
+            .ToList();
 
     private static DateTime? PreferDate(DateTime? incoming, DateTime? existing) =>
         incoming ?? existing;

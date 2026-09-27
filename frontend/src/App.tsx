@@ -1,6 +1,7 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 import type { ReactNode } from "react";
 import { useAuth } from "./auth/AuthContext";
+import ApplicationPage from "./pages/ApplicationPage";
 import DashboardPage from "./pages/DashboardPage";
 import LoginPage from "./pages/LoginPage";
 
@@ -31,6 +32,14 @@ export default function App() {
         element={
           <ProtectedRoute>
             <DashboardPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/applications/:id"
+        element={
+          <ProtectedRoute>
+            <ApplicationPage />
           </ProtectedRoute>
         }
       />

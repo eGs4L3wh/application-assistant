@@ -9,24 +9,24 @@ public sealed class CvGenerator(ILLMService llm) : ICvGenerator
     private const string SystemPrompt = """
         You write tailored CVs optimized to score highly against the given job advertisement in ATS and AI screening tools.
         Use ONLY the candidate's provided experience and education. Never invent employers, degrees, dates, tools, or achievements that are not grounded in the source text.
-
-        Job metadata (required):
-        - Extract targetCompany and targetRoleTitle from the job advertisement.
-        - Prefer the official employer name and the posted role title as written in the ad.
-        - If either cannot be determined confidently, leave it as an empty string.
+        The target company and role are already identified in the user message. Do not extract or return them.
 
         Identity (critical):
         - Preserve each experience and education Id EXACTLY as given in the source JSON. Do not invent or omit Ids.
 
         Alignment (critical):
         - Extract the job ad's must-have skills, tools, domain terms, responsibilities, and seniority language.
-        - Mirror those exact phrases and keywords in the summary, skills list, titles, and descriptions wherever the candidate's experience truthfully supports them (same meaning; prefer the ad's wording over synonyms).
+        - Mirror those exact phrases and keywords in the skills list, titles, and descriptions wherever the candidate's experience truthfully supports them (same meaning; prefer the ad's wording over synonyms).
         - Lead with the strongest matches: put the most ad-relevant achievements first in each role description.
-        - In the summary, explicitly connect the candidate to the target role using the ad's key requirements (4-6 sentences, dense with job-ad keywords and concrete evidence from the career).
         - Build skills[] primarily from terms that appear in the job ad and are evidenced in the candidate's experience; list the highest-priority matches first. Prefer a fuller skills list (typically 12-20 items) over a short one when the source supports it.
-        - Prefer roles that match the ad; assign higher relevanceScore (0-100) to closer matches.
-        - Skip short stints: if a role lasted under 3 months (from StartDate to EndDate, or to today if IsCurrent), set include=false unless it is very relevant to the job ad (roughly relevanceScore >= 80).
-        - Mark clearly irrelevant roles with include=false, but when unsure prefer include=true so the CV keeps career breadth and length (except short stints under 3 months that are not very relevant).
+        - Score every role with relevanceScore from 0 to 100 for how well it matches the job ad. 70 or above means the role belongs on the CV.
+        - Set include=true for every role, including ones that overlap in time. A later step hides only roles scored below 70. Do not drop overlapping roles.
+
+        Per-role skills (critical):
+        - For each experience, return skills[] as short tags for that role (languages, frameworks, cloud providers, databases, tools, methods).
+        - Ground skills in the source Skills list and Description — never invent tools the candidate did not use.
+        - Prefer tags that also match the job ad when truthful; keep other truthful tags that show breadth.
+        - Typically 4-12 tags per included role; empty list is fine for include=false or when nothing is evidenced.
 
         Titles / roles:
         - Keep Company as the real employer name from the source (do not replace with the target company).
@@ -34,24 +34,65 @@ public sealed class CvGenerator(ILLMService llm) : ICvGenerator
         - Do not invent promotions, seniority the candidate did not hold, or fake job titles.
 
         Descriptions:
-        - For include=true roles: rewrite Description as substantial free text tailored to the job ad, grounded in the source Description. Expand and rephrase — never paste the source Description verbatim unchanged, and never strip the source down to a thin summary.
+        - For each role, tailor descriptions to the job ad, grounded in the source Description. Expand and rephrase — never paste the source Description verbatim unchanged, and never strip the source down to a thin summary.
         - Target length per included role: typically 4-8 sentences or a short multi-paragraph block (use line breaks between ideas). Cover scope, responsibilities, tech/stack, methods, stakeholders, and concrete outcomes wherever the source supports them.
         - Prioritize the most ad-relevant achievements first, then retain other truthful detail from the source so the role still reads full and credible.
-        - For include=false roles: you may leave Description empty or briefly unchanged.
         - Prefer concrete outcomes (scope, impact, tech/stack, methods) phrased with the ad's vocabulary.
         - Tense: for roles with IsCurrent=true or EndDate=Present, write in present tense. For past roles, use past tense.
 
+        Voice (critical):
+        - Plain factual statements only. No superlatives, no self-praise, no LinkedIn openers.
+        - Banned words and phrases, including close variants: highly, accomplished, extensive, proven, expert, adept, significant, seasoned, passionate, results-driven, track record, world-class, best-in-class, exceptional, outstanding, deeply, robust.
+        - This applies to every role description.
+
         Output length (critical):
         - The finished CV should land around two A4 pages when rendered — not a sparse one-page CV. Err on the side of richer descriptions and more included roles when the source supports it.
-        - Do not omit experience entries; always return every source Id.
         - Still return valid complete JSON; do not truncate mid-field.
 
-        Return JSON matching the sample shape exactly (same fields and Ids), with rewritten summary, skills, titles, and descriptions.
+        Return JSON matching the sample shape exactly (same fields and Ids), with rewritten skills, titles, and descriptions.
         """;
+
+    private const string MetadataSystemPrompt = """
+        Extract the hiring company and the posted job title from the job advertisement.
+        Prefer the official employer name and the role title as written in the ad.
+        If either cannot be determined confidently, leave it as an empty string.
+        Return JSON matching the sample shape exactly.
+        """;
+
+    public async Task<JobAdMetadata> ExtractJobMetadataAsync(string jobAd, CancellationToken cancellationToken = default)
+    {
+        _ = cancellationToken;
+
+        var sample = new JobAdMetadata
+        {
+            Company = "Acme Corp",
+            RoleTitle = "Software Engineer"
+        };
+        var history = new[]
+        {
+            new InputItem
+            {
+                FromUser = true,
+                Text = jobAd.Trim()
+            }
+        };
+
+        var metadata = await llm.GetResponseAsync(sample, MetadataSystemPrompt, history, temperature: 0.1m, maxTokens: 1024, thinkingBudget: 0);
+        metadata.Company = metadata.Company?.Trim() ?? string.Empty;
+        metadata.RoleTitle = metadata.RoleTitle?.Trim() ?? string.Empty;
+        return metadata;
+    }
 
     public async Task<CvDraft> GenerateAsync(CvGenerationRequest request, CancellationToken cancellationToken = default)
     {
-        _ = cancellationToken;
+        var company = request.TargetCompany;
+        var roleTitle = request.TargetRoleTitle;
+        if (string.IsNullOrWhiteSpace(company) || string.IsNullOrWhiteSpace(roleTitle))
+        {
+            var metadata = await ExtractJobMetadataAsync(request.JobAd, cancellationToken);
+            if (string.IsNullOrWhiteSpace(company)) company = metadata.Company;
+            if (string.IsNullOrWhiteSpace(roleTitle)) roleTitle = metadata.RoleTitle;
+        }
 
         var sample = BuildSample(request);
         var history = new[]
@@ -59,12 +100,107 @@ public sealed class CvGenerator(ILLMService llm) : ICvGenerator
             new InputItem
             {
                 FromUser = true,
-                Text = BuildUserPayload(request)
+                Text = BuildUserPayload(request, company, roleTitle)
             }
         };
 
         var draft = await llm.GetResponseAsync(sample, SystemPrompt, history, temperature: 0.35m, maxTokens: 16384);
-        return NormalizeDraft(draft, request);
+        draft = NormalizeDraft(draft, request);
+        draft.TargetCompany = string.IsNullOrWhiteSpace(company) ? null : company.Trim();
+        draft.TargetRoleTitle = string.IsNullOrWhiteSpace(roleTitle) ? null : roleTitle.Trim();
+        draft.Summary = await WriteSummaryAsync(request, draft, company, roleTitle, cancellationToken);
+        return draft;
+    }
+
+    private const string SummarySystemPrompt = """
+        You write the professional summary for a CV that has already been drafted.
+        Use ONLY the included roles, their descriptions, the skills list, and the job ad. Do not invent employers, tools, or achievements.
+        Write several sentences that connect the candidate to the target role using the job ad's wording where the drafted roles support it.
+        Focus on the roles that are relevant to the target role.
+
+        Voice (critical):
+        - Plain factual statements only. No superlatives, no self-praise, no LinkedIn openers.
+        - Do not copy the sample sentence. Write from the included roles below.
+
+        Return JSON matching the sample shape exactly.
+        """;
+
+    private async Task<string> WriteSummaryAsync(
+        CvGenerationRequest request,
+        CvDraft draft,
+        string? targetCompany,
+        string? targetRoleTitle,
+        CancellationToken cancellationToken)
+    {
+        _ = cancellationToken;
+
+        var sample = new CvSummaryDraft
+        {
+            Summary = "Lead backend engineer who designs distributed systems and APIs in C# and TypeScript."
+        };
+        var history = new[]
+        {
+            new InputItem
+            {
+                FromUser = true,
+                Text = BuildSummaryPayload(request, draft, targetCompany, targetRoleTitle)
+            }
+        };
+
+        var result = await llm.GetResponseAsync(sample, SummarySystemPrompt, history, temperature: 0.2m, maxTokens: 2048, thinkingBudget: 0);
+        var summary = result.Summary?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(summary) || IsPlaceholderSummary(summary))
+        {
+            var role = string.IsNullOrWhiteSpace(targetRoleTitle) ? "Engineer" : targetRoleTitle.Trim();
+            return $"{role} applying the experience in this CV to the target role.";
+        }
+
+        return summary;
+    }
+
+    private static string BuildSummaryPayload(
+        CvGenerationRequest request,
+        CvDraft draft,
+        string? targetCompany,
+        string? targetRoleTitle)
+    {
+        var included = draft.Experiences
+            .Where(e => e.Include)
+            .Select(e => new
+            {
+                e.Title,
+                e.Company,
+                e.IsCurrent,
+                Description = Truncate(e.Description, 500),
+                Skills = e.Skills
+            });
+
+        var sb = new StringBuilder();
+        if (!string.IsNullOrWhiteSpace(targetCompany))
+        {
+            sb.AppendLine($"Target company: {targetCompany.Trim()}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(targetRoleTitle))
+        {
+            sb.AppendLine($"Target role: {targetRoleTitle.Trim()}");
+        }
+
+        sb.AppendLine();
+        sb.AppendLine("JOB AD:");
+        sb.AppendLine(request.JobAd.Trim());
+        sb.AppendLine();
+        sb.AppendLine("CV SKILLS:");
+        sb.AppendLine(JsonSerializer.Serialize(draft.Skills));
+        sb.AppendLine();
+        sb.AppendLine("INCLUDED ROLES (already tailored):");
+        sb.AppendLine(JsonSerializer.Serialize(included));
+        return sb.ToString();
+    }
+
+    private sealed class CvSummaryDraft
+    {
+        public string Summary { get; set; } = string.Empty;
     }
 
     private const string RefineSystemPrompt = """
@@ -128,9 +264,7 @@ public sealed class CvGenerator(ILLMService llm) : ICvGenerator
 
     private static CvDraft BuildSample(CvGenerationRequest request) => new()
     {
-        TargetCompany = request.TargetCompany ?? "Acme Corp",
-        TargetRoleTitle = request.TargetRoleTitle ?? "Software Engineer",
-        Summary = "Short tailored summary.",
+        Summary = string.Empty,
         Skills = ["Skill A", "Skill B"],
             Experiences = request.Experiences.Select(e => new CvDraftExperience
             {
@@ -144,7 +278,8 @@ public sealed class CvGenerator(ILLMService llm) : ICvGenerator
                 EndDate = e.EndDate,
                 IsCurrent = e.IsCurrent,
                 EngagementType = e.EngagementType,
-                Description = e.Description
+                Description = e.Description,
+                Skills = e.Skills is { Count: > 0 } ? e.Skills.ToList() : ["C#", "Azure"]
             }).ToList(),
         Education = request.Education.Select(e => new CvDraftEducation
         {
@@ -159,7 +294,7 @@ public sealed class CvGenerator(ILLMService llm) : ICvGenerator
         }).ToList()
     };
 
-    private static string BuildUserPayload(CvGenerationRequest request)
+    private static string BuildUserPayload(CvGenerationRequest request, string? targetCompany, string? targetRoleTitle)
     {
         var sb = new StringBuilder();
         sb.AppendLine($"Candidate: {request.FullName} <{request.Email}>");
@@ -167,14 +302,14 @@ public sealed class CvGenerator(ILLMService llm) : ICvGenerator
         {
             sb.AppendLine($"Phone: {request.Phone}");
         }
-        if (!string.IsNullOrWhiteSpace(request.TargetCompany))
+        if (!string.IsNullOrWhiteSpace(targetCompany))
         {
-            sb.AppendLine($"Target company: {request.TargetCompany}");
+            sb.AppendLine($"Target company: {targetCompany.Trim()}");
         }
 
-        if (!string.IsNullOrWhiteSpace(request.TargetRoleTitle))
+        if (!string.IsNullOrWhiteSpace(targetRoleTitle))
         {
-            sb.AppendLine($"Target role: {request.TargetRoleTitle}");
+            sb.AppendLine($"Target role: {targetRoleTitle.Trim()}");
         }
 
         sb.AppendLine();
@@ -192,7 +327,8 @@ public sealed class CvGenerator(ILLMService llm) : ICvGenerator
             EndDate = e.IsCurrent ? "Present" : FormatDate(e.EndDate),
             e.IsCurrent,
             e.EngagementType,
-            Description = Truncate(e.Description, 700)
+            Description = Truncate(e.Description, 700),
+            Skills = e.Skills
         })));
         sb.AppendLine();
         sb.AppendLine("SOURCE EDUCATION (JSON):");
@@ -223,13 +359,6 @@ public sealed class CvGenerator(ILLMService llm) : ICvGenerator
     {
         var experienceById = request.Experiences.ToDictionary(e => e.Id);
         var educationById = request.Education.ToDictionary(e => e.Id);
-
-        draft.TargetCompany = string.IsNullOrWhiteSpace(draft.TargetCompany)
-            ? (string.IsNullOrWhiteSpace(request.TargetCompany) ? null : request.TargetCompany.Trim())
-            : draft.TargetCompany.Trim();
-        draft.TargetRoleTitle = string.IsNullOrWhiteSpace(draft.TargetRoleTitle)
-            ? (string.IsNullOrWhiteSpace(request.TargetRoleTitle) ? null : request.TargetRoleTitle.Trim())
-            : draft.TargetRoleTitle.Trim();
 
         draft.Summary = string.IsNullOrWhiteSpace(draft.Summary)
             ? "Experienced professional seeking the target role."
@@ -312,7 +441,8 @@ public sealed class CvGenerator(ILLMService llm) : ICvGenerator
                 EndDate = source.EndDate,
                 IsCurrent = source.IsCurrent,
                 EngagementType = source.EngagementType,
-                Description = source.Description
+                Description = source.Description,
+                Skills = NormalizeSkills(source.Skills)
             });
         }
 
@@ -332,12 +462,8 @@ public sealed class CvGenerator(ILLMService llm) : ICvGenerator
             }
         }
 
+        ApplyRelevanceCutoff(experiences);
         draft.Experiences = experiences;
-
-        if (IsPlaceholderSummary(draft.Summary))
-        {
-            draft.Summary = "Experienced professional seeking the target role.";
-        }
 
         draft.Skills = draft.Skills
             .Where(s => !IsPlaceholderSkill(s))
@@ -409,8 +535,36 @@ public sealed class CvGenerator(ILLMService llm) : ICvGenerator
             EndDate = source.EndDate,
             IsCurrent = source.IsCurrent,
             EngagementType = string.IsNullOrWhiteSpace(source.EngagementType) ? "Permanent" : source.EngagementType,
-            Description = description
+            Description = description,
+            Skills = PreferSkills(item.Skills, source.Skills)
         };
+    }
+
+    private static List<string> PreferSkills(IEnumerable<string>? preferred, IEnumerable<string>? fallback)
+    {
+        var fromPreferred = NormalizeSkills(preferred);
+        return fromPreferred.Count > 0 ? fromPreferred : NormalizeSkills(fallback);
+    }
+
+    private static List<string> NormalizeSkills(IEnumerable<string>? skills) =>
+        (skills ?? [])
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Select(s => s.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(20)
+            .ToList();
+
+    private const double MinIncludedRelevance = 70;
+
+    /// <summary>
+    /// Hides roles the model scored below 70. Overlaps and higher scores stay included for the user to edit.
+    /// </summary>
+    private static void ApplyRelevanceCutoff(List<CvDraftExperience> experiences)
+    {
+        foreach (var experience in experiences)
+        {
+            experience.Include = experience.RelevanceScore >= MinIncludedRelevance;
+        }
     }
 
     private static bool IsPlaceholderSummary(string? value) =>

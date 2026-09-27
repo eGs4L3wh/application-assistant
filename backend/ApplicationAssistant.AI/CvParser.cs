@@ -14,6 +14,7 @@ public sealed class CvParser(ILLMService llm) : ICvParser
         Use empty strings for unknown fields. Prefer concise descriptions.
         Dates may be free-form strings as written on the CV (e.g. "Jan 2020", "2018", "Present").
         For each experience, set engagementType to "Permanent" or "Contract" when the CV indicates it (e.g. contractor, freelance, fixed-term, permanent employee). Leave engagementType empty when unclear.
+        For each experience, extract skills[] as short tags evidenced in that role (programming languages, frameworks, cloud providers, databases, tools, methods). Prefer concrete names (e.g. "C#", "AWS", "Kubernetes"). Leave skills empty when none are clear.
         """;
 
     public async Task<CvParseResult> ParseAsync(
@@ -45,7 +46,8 @@ public sealed class CvParser(ILLMService llm) : ICvParser
                     EndDate = "Dec 2022",
                     IsCurrent = false,
                     EngagementType = "Permanent",
-                    Description = "Built APIs and web apps."
+                    Description = "Built APIs and web apps.",
+                    Skills = ["C#", "ASP.NET", "Azure"]
                 }
             ],
             Education =
@@ -79,6 +81,11 @@ public sealed class CvParser(ILLMService llm) : ICvParser
 
         parsed.Experiences = parsed.Experiences
             .Where(e => !string.IsNullOrWhiteSpace(e.Company) || !string.IsNullOrWhiteSpace(e.Title))
+            .Select(e =>
+            {
+                e.Skills = NormalizeSkillTags(e.Skills);
+                return e;
+            })
             .ToList();
         parsed.Education = parsed.Education
             .Where(e => !string.IsNullOrWhiteSpace(e.Institution))
@@ -88,6 +95,14 @@ public sealed class CvParser(ILLMService llm) : ICvParser
 
         return parsed;
     }
+
+    internal static List<string> NormalizeSkillTags(IEnumerable<string>? skills) =>
+        (skills ?? [])
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Select(s => s.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(20)
+            .ToList();
 
     private static string ExtractText(byte[] content, string contentType, string fileName)
     {

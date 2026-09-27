@@ -1,11 +1,20 @@
+using System.Text.Json.Serialization;
+
 namespace ApplicationAssistant.AI;
 
 public interface ICvGenerator
 {
+    Task<JobAdMetadata> ExtractJobMetadataAsync(string jobAd, CancellationToken cancellationToken = default);
     Task<CvDraft> GenerateAsync(CvGenerationRequest request, CancellationToken cancellationToken = default);
     Task<ExperienceRefineResult> RefineExperienceAsync(
         ExperienceRefineRequest request,
         CancellationToken cancellationToken = default);
+}
+
+public sealed class JobAdMetadata
+{
+    public string Company { get; set; } = string.Empty;
+    public string RoleTitle { get; set; } = string.Empty;
 }
 
 public sealed class ExperienceRefineRequest
@@ -49,6 +58,7 @@ public sealed class CvSourceExperience
     public bool IsCurrent { get; init; }
     public string EngagementType { get; init; } = "Permanent";
     public string? Description { get; init; }
+    public List<string> Skills { get; init; } = [];
 }
 
 public sealed class CvSourceEducation
@@ -64,8 +74,11 @@ public sealed class CvSourceEducation
 
 public sealed class CvDraft
 {
+    [JsonIgnore]
     public string? TargetCompany { get; set; }
+    [JsonIgnore]
     public string? TargetRoleTitle { get; set; }
+    [JsonIgnore]
     public string Summary { get; set; } = string.Empty;
     public List<string> Skills { get; set; } = [];
     public List<CvDraftExperience> Experiences { get; set; } = [];
@@ -85,6 +98,7 @@ public sealed class CvDraftExperience
     public bool IsCurrent { get; set; }
     public string EngagementType { get; set; } = "Permanent";
     public string? Description { get; set; }
+    public List<string> Skills { get; set; } = [];
 }
 
 public sealed class CvDraftEducation

@@ -69,12 +69,17 @@ public class GeminiLLMService : ILLMService
 
     private static string ReadText(GenerateContentResponse response)
     {
-        if (string.IsNullOrWhiteSpace(response.Text))
+        if (!string.IsNullOrWhiteSpace(response.Text))
         {
-            throw new Exception("Gemini request returned empty");
+            return response.Text.Trim();
         }
 
-        return response.Text.Trim();
+        var candidate = response.Candidates?.FirstOrDefault();
+        var finish = candidate?.FinishReason?.ToString() ?? "none";
+        var finishMessage = string.IsNullOrWhiteSpace(candidate?.FinishMessage) ? "none" : candidate.FinishMessage;
+        var block = response.PromptFeedback?.BlockReason?.ToString() ?? "none";
+        throw new Exception(
+            $"Gemini request returned empty (finish={finish}, block={block}, message={finishMessage}).");
     }
 
     private static string CleanJsonResponse(string responseText) =>
@@ -268,7 +273,7 @@ public class GeminiLLMService : ILLMService
         }
     }
 
-    public async Task<T> GetResponseAsync<T>(T sample, string prompt, IEnumerable<InputItem> inputHistory, decimal? temperature = 0.5m, int maxTokens = 8192)
+    public async Task<T> GetResponseAsync<T>(T sample, string prompt, IEnumerable<InputItem> inputHistory, decimal? temperature = 0.5m, int maxTokens = 8192, int? thinkingBudget = null)
     {
         var sampleJson = JsonSerializer.Serialize(sample);
         var systemSuffix = $"CRITICAL: Return a JSON like this ```json{sampleJson}```, NEVER return anything else than this json.";
@@ -277,7 +282,7 @@ public class GeminiLLMService : ILLMService
 
         try
         {
-            var responseText = await GenerateJsonAsync(prompt, systemSuffix, inputHistory, temperature, maxTokens);
+            var responseText = await GenerateJsonAsync(prompt, systemSuffix, inputHistory, temperature, maxTokens, thinkingBudget);
             if (TryDeserializeResponse<T>(responseText, out var value))
             {
                 _logger.LogTrace("GetResponseAsync<{Type}> (sample): returned ({Length} chars)", typeof(T).Name, responseText.Length);
@@ -291,7 +296,7 @@ public class GeminiLLMService : ILLMService
                     responseText.Length,
                     responseText.Length > 400 ? responseText[^400..] : responseText);
 
-                var retryText = await GenerateJsonAsync(prompt, systemSuffix, inputHistory, temperature, 65536);
+                var retryText = await GenerateJsonAsync(prompt, systemSuffix, inputHistory, temperature, 65536, thinkingBudget);
                 if (TryDeserializeResponse<T>(retryText, out value))
                 {
                     _logger.LogTrace("GetResponseAsync<{Type}> (sample retry): returned ({Length} chars)", typeof(T).Name, retryText.Length);
@@ -333,7 +338,8 @@ public class GeminiLLMService : ILLMService
         string systemSuffix,
         IEnumerable<InputItem> inputHistory,
         decimal? temperature,
-        int maxTokens)
+        int maxTokens,
+        int? thinkingBudget = null)
     {
         var client = new GoogleAi(GetApiKey());
         var googleModel = client.CreateGenerativeModel("models/gemini-2.5-flash");
@@ -345,7 +351,10 @@ public class GeminiLLMService : ILLMService
             {
                 Temperature = (float?)temperature,
                 MaxOutputTokens = maxTokens,
-                ResponseMimeType = "application/json"
+                ResponseMimeType = "application/json",
+                ThinkingConfig = thinkingBudget is null
+                    ? null
+                    : new ThinkingConfig { ThinkingBudget = thinkingBudget }
             }
         });
 

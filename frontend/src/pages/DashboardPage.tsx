@@ -1,49 +1,19 @@
 import { useEffect, useState, type FormEvent } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   api,
   ENGAGEMENT_TYPES,
-  type ApplicationDetail,
   type ApplicationItem,
   type CvItem,
-  type DraftEducation,
-  type DraftExperience,
   type EducationInput,
   type EducationRecord,
   type ExperienceInput,
   type WorkExperience
 } from "../api";
 import { useAuth } from "../auth/AuthContext";
-
-function formatProfileDate(iso?: string | null) {
-  if (!iso) return "—";
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return "—";
-  return date.toLocaleDateString("en-GB", {
-    month: "short",
-    year: "numeric",
-    timeZone: "UTC"
-  });
-}
-
-function formatDateRange(start?: string | null, end?: string | null, isCurrent?: boolean) {
-  const from = formatProfileDate(start);
-  const to = isCurrent ? "Present" : formatProfileDate(end);
-  return `${from} – ${to}`;
-}
-
-function toMonthInput(iso?: string | null): string {
-  if (!iso) return "";
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return "";
-  const year = date.getUTCFullYear();
-  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
-  return `${year}-${month}`;
-}
-
-function fromMonthInput(value: string): string | null {
-  const trimmed = value.trim();
-  return trimmed ? `${trimmed}-01` : null;
-}
+import { SkillTags, SkillTagsField } from "../components/SkillTagsField";
+import { formatDateRange, fromMonthInput, toMonthInput } from "../lib/dates";
+import { downloadBlob } from "../lib/download";
 
 function emptyExperienceForm(): ExperienceInput {
   return {
@@ -54,7 +24,8 @@ function emptyExperienceForm(): ExperienceInput {
     endDate: "",
     isCurrent: false,
     engagementType: "Permanent",
-    description: ""
+    description: "",
+    skills: []
   };
 }
 
@@ -67,7 +38,8 @@ function toExperienceForm(item: WorkExperience): ExperienceInput {
     endDate: toMonthInput(item.endDate),
     isCurrent: item.isCurrent,
     engagementType: item.engagementType || "Permanent",
-    description: item.description ?? ""
+    description: item.description ?? "",
+    skills: item.skills ?? []
   };
 }
 
@@ -93,21 +65,9 @@ function toEducationForm(item: EducationRecord): EducationInput {
   };
 }
 
-function downloadBlob(blob: Blob, fileName: string) {
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = fileName;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  URL.revokeObjectURL(url);
-}
-
-type ModalStep = "input" | "preview";
-
 export default function DashboardPage() {
   const { user, logout } = useAuth();
+  const navigate = useNavigate();
   const [cvs, setCvs] = useState<CvItem[]>([]);
   const [experience, setExperience] = useState<WorkExperience[]>([]);
   const [education, setEducation] = useState<EducationRecord[]>([]);
@@ -123,17 +83,6 @@ export default function DashboardPage() {
   const [editingEducationId, setEditingEducationId] = useState<string | "new" | null>(null);
   const [educationForm, setEducationForm] = useState<EducationInput>(emptyEducationForm());
   const [savingEducation, setSavingEducation] = useState(false);
-
-  const [modalOpen, setModalOpen] = useState(false);
-  const [modalStep, setModalStep] = useState<ModalStep>("input");
-  const [jobAd, setJobAd] = useState("");
-  const [previewing, setPreviewing] = useState(false);
-  const [savingDraft, setSavingDraft] = useState(false);
-  const [finalizing, setFinalizing] = useState(false);
-  const [draft, setDraft] = useState<ApplicationDetail | null>(null);
-  const [aiEditExperienceId, setAiEditExperienceId] = useState<string | null>(null);
-  const [aiEditPrompt, setAiEditPrompt] = useState("");
-  const [aiEditingId, setAiEditingId] = useState<string | null>(null);
 
   async function load() {
     try {
@@ -158,35 +107,6 @@ export default function DashboardPage() {
     void load();
   }, []);
 
-  function openNewApplication() {
-    setDraft(null);
-    setJobAd("");
-    setModalStep("input");
-    setModalOpen(true);
-    setError(null);
-  }
-
-  function closeModal() {
-    setModalOpen(false);
-    setDraft(null);
-    setJobAd("");
-    setModalStep("input");
-    closeAiEdit();
-  }
-
-  async function openExistingApplication(id: string) {
-    setError(null);
-    try {
-      const detail = await api.getApplication(id);
-      setDraft(detail);
-      setJobAd(detail.jobAd ?? "");
-      setModalStep(detail.experiences.length > 0 || detail.education.length > 0 ? "preview" : "input");
-      setModalOpen(true);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not open application");
-    }
-  }
-
   async function onUpload(fileList: FileList | null) {
     const file = fileList?.[0];
     if (!file) return;
@@ -199,129 +119,6 @@ export default function DashboardPage() {
       setError(err instanceof Error ? err.message : "Upload failed");
     } finally {
       setUploading(false);
-    }
-  }
-
-  async function onCreatePreview(event: FormEvent) {
-    event.preventDefault();
-    setPreviewing(true);
-    setError(null);
-    try {
-      const detail = await api.previewApplication(jobAd);
-      setDraft(detail);
-      setModalStep("preview");
-      await load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not create preview");
-    } finally {
-      setPreviewing(false);
-    }
-  }
-
-  function updateDraftExperience(id: string, patch: Partial<DraftExperience>) {
-    setDraft((current) => {
-      if (!current) return current;
-      return {
-        ...current,
-        experiences: current.experiences.map((exp) => (exp.id === id ? { ...exp, ...patch } : exp))
-      };
-    });
-  }
-
-  function updateDraftEducation(id: string, patch: Partial<DraftEducation>) {
-    setDraft((current) => {
-      if (!current) return current;
-      return {
-        ...current,
-        education: current.education.map((edu) => (edu.id === id ? { ...edu, ...patch } : edu))
-      };
-    });
-  }
-
-  function openAiEdit(experienceId: string) {
-    setAiEditExperienceId(experienceId);
-    setAiEditPrompt("");
-  }
-
-  function closeAiEdit() {
-    setAiEditExperienceId(null);
-    setAiEditPrompt("");
-  }
-
-  async function onAiEditExperience(experienceId: string) {
-    if (!draft || !aiEditPrompt.trim()) return;
-    setAiEditingId(experienceId);
-    setError(null);
-    try {
-      const updated = await api.refineExperience(draft.id, experienceId, aiEditPrompt.trim());
-      updateDraftExperience(experienceId, {
-        description: updated.description,
-        title: updated.title,
-        company: updated.company
-      });
-      closeAiEdit();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not refine description");
-    } finally {
-      setAiEditingId(null);
-    }
-  }
-
-  async function persistDraft(): Promise<ApplicationDetail | null> {
-    if (!draft) return null;
-    return api.updateApplicationDraft(draft.id, {
-      company: draft.company,
-      roleTitle: draft.roleTitle,
-      summary: draft.summary ?? "",
-      skills: draft.skills,
-      experiences: draft.experiences.map((exp) => ({
-        ...exp,
-        isCurrent: exp.isCurrent ?? false,
-        engagementType: exp.engagementType || "Permanent",
-        endDate: exp.isCurrent ? null : exp.endDate
-      })),
-      education: draft.education
-    });
-  }
-
-  async function onSaveAndClose() {
-    if (!draft) {
-      closeModal();
-      return;
-    }
-    setSavingDraft(true);
-    setError(null);
-    try {
-      await persistDraft();
-      closeModal();
-      await load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not save draft");
-    } finally {
-      setSavingDraft(false);
-    }
-  }
-
-  async function onSaveAndGenerate() {
-    if (!draft) return;
-    setSavingDraft(true);
-    setFinalizing(true);
-    setError(null);
-    try {
-      await persistDraft();
-      const { blob, fileName } = await api.finalizeApplication(draft.id);
-      downloadBlob(blob, fileName);
-      setDraft((current) =>
-        current
-          ? { ...current, status: "Generated", cvFileName: fileName, hasGeneratedCv: true }
-          : current
-      );
-      await load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not generate CV");
-    } finally {
-      setSavingDraft(false);
-      setFinalizing(false);
     }
   }
 
@@ -342,9 +139,6 @@ export default function DashboardPage() {
     setError(null);
     try {
       await api.deleteApplication(id);
-      if (draft?.id === id) {
-        closeModal();
-      }
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not delete application");
@@ -352,6 +146,7 @@ export default function DashboardPage() {
   }
 
   function startCreateExperience() {
+    setError(null);
     setEditingExperienceId("new");
     setExperienceForm(emptyExperienceForm());
   }
@@ -375,6 +170,7 @@ export default function DashboardPage() {
   }
 
   function startEditExperience(item: WorkExperience) {
+    setError(null);
     setEditingExperienceId(item.id);
     setExperienceForm(toExperienceForm(item));
   }
@@ -382,6 +178,7 @@ export default function DashboardPage() {
   function cancelExperienceEdit() {
     setEditingExperienceId(null);
     setExperienceForm(emptyExperienceForm());
+    setError(null);
   }
 
   async function onSaveExperience(event: FormEvent) {
@@ -397,7 +194,8 @@ export default function DashboardPage() {
         endDate: experienceForm.isCurrent ? null : fromMonthInput(experienceForm.endDate ?? ""),
         isCurrent: experienceForm.isCurrent,
         engagementType: experienceForm.engagementType || "Permanent",
-        description: experienceForm.description?.trim() || null
+        description: experienceForm.description?.trim() || null,
+        skills: experienceForm.skills ?? []
       };
 
       if (editingExperienceId === "new") {
@@ -517,7 +315,11 @@ export default function DashboardPage() {
           <span className="btn btn-secondary">{uploading ? "Parsing…" : "Choose file"}</span>
         </label>
 
-        <button type="button" className="action-card action-card-button" onClick={openNewApplication}>
+        <button
+          type="button"
+          className="action-card action-card-button"
+          onClick={() => navigate("/applications/new")}
+        >
           <span className="action-title">New application</span>
           <span className="action-copy">Paste a job ad, review the tailored draft, then download your CV.</span>
           <span className="btn btn-primary">Start</span>
@@ -568,99 +370,6 @@ export default function DashboardPage() {
             </button>
           </div>
 
-          {editingExperienceId !== null && (
-            <form className="form profile-form" onSubmit={(e) => void onSaveExperience(e)}>
-              <h3>{editingExperienceId === "new" ? "New experience" : "Edit experience"}</h3>
-              <label>
-                Company
-                <input
-                  value={experienceForm.company}
-                  onChange={(e) => setExperienceForm((f) => ({ ...f, company: e.target.value }))}
-                  required
-                />
-              </label>
-              <label>
-                Title
-                <input
-                  value={experienceForm.title}
-                  onChange={(e) => setExperienceForm((f) => ({ ...f, title: e.target.value }))}
-                  required
-                />
-              </label>
-              <label>
-                Location
-                <input
-                  value={experienceForm.location ?? ""}
-                  onChange={(e) => setExperienceForm((f) => ({ ...f, location: e.target.value }))}
-                />
-              </label>
-              <label>
-                Engagement
-                <select
-                  value={experienceForm.engagementType || "Permanent"}
-                  onChange={(e) =>
-                    setExperienceForm((f) => ({ ...f, engagementType: e.target.value }))
-                  }
-                >
-                  {ENGAGEMENT_TYPES.map((type) => (
-                    <option key={type} value={type}>
-                      {type}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <div className="form-row">
-                <label>
-                  Start
-                  <input
-                    type="month"
-                    value={experienceForm.startDate ?? ""}
-                    onChange={(e) => setExperienceForm((f) => ({ ...f, startDate: e.target.value }))}
-                  />
-                </label>
-                <label>
-                  End
-                  <input
-                    type="month"
-                    value={experienceForm.endDate ?? ""}
-                    onChange={(e) => setExperienceForm((f) => ({ ...f, endDate: e.target.value }))}
-                    disabled={experienceForm.isCurrent}
-                  />
-                </label>
-              </div>
-              <label className="checkbox-row">
-                <input
-                  type="checkbox"
-                  checked={experienceForm.isCurrent}
-                  onChange={(e) =>
-                    setExperienceForm((f) => ({
-                      ...f,
-                      isCurrent: e.target.checked,
-                      endDate: e.target.checked ? "" : f.endDate
-                    }))
-                  }
-                />
-                Current role
-              </label>
-              <label>
-                Description
-                <textarea
-                  value={experienceForm.description ?? ""}
-                  onChange={(e) => setExperienceForm((f) => ({ ...f, description: e.target.value }))}
-                  rows={3}
-                />
-              </label>
-              <div className="form-actions">
-                <button type="button" className="btn btn-ghost" onClick={cancelExperienceEdit}>
-                  Cancel
-                </button>
-                <button type="submit" className="btn btn-primary" disabled={savingExperience}>
-                  {savingExperience ? "Saving…" : "Save"}
-                </button>
-              </div>
-            </form>
-          )}
-
           {experience.length === 0 ? (
             <p className="muted">Upload a CV or add experience manually.</p>
           ) : (
@@ -695,6 +404,7 @@ export default function DashboardPage() {
                     {item.location ? ` · ${item.location}` : ""}
                   </span>
                   {item.description && <span className="list-detail">{item.description}</span>}
+                  <SkillTags skills={item.skills ?? []} />
                 </li>
               ))}
             </ul>
@@ -856,7 +566,7 @@ export default function DashboardPage() {
                       <button
                         type="button"
                         className="btn btn-ghost btn-small"
-                        onClick={() => void openExistingApplication(app.id)}
+                        onClick={() => navigate(`/applications/${app.id}`)}
                       >
                         Open
                       </button>
@@ -881,365 +591,129 @@ export default function DashboardPage() {
         </div>
       </section>
 
-      {modalOpen && (
-        <div className="modal-backdrop" role="presentation" onClick={closeModal}>
+
+      {editingExperienceId !== null && (
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onClick={cancelExperienceEdit}
+        >
           <div
-            className="modal"
+            className="modal modal-compact"
             role="dialog"
             aria-modal="true"
-            aria-labelledby="application-modal-title"
+            aria-labelledby="experience-modal-title"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="modal-header">
               <div>
-                <h2 id="application-modal-title">
-                  {modalStep === "input" ? "New application" : "Review tailored draft"}
+                <h2 id="experience-modal-title">
+                  {editingExperienceId === "new" ? "New experience" : "Edit experience"}
                 </h2>
-                {draft && modalStep === "preview" && (
-                  <p className="muted modal-subtitle">
-                    {draft.roleTitle} · {draft.company}
-                  </p>
-                )}
               </div>
-              <button type="button" className="btn btn-ghost btn-small" onClick={closeModal}>
+              <button type="button" className="btn btn-ghost btn-small" onClick={cancelExperienceEdit}>
                 Close
               </button>
             </div>
 
-            {modalStep === "input" ? (
-              <form
-                className="modal-form"
-                onSubmit={(e) => void onCreatePreview(e)}
-              >
-                <div className="modal-body form">
+            <form className="modal-form" onSubmit={(e) => void onSaveExperience(e)}>
+              <div className="modal-body form">
+                {error && <div className="banner error">{error}</div>}
+                <label>
+                  Company
+                  <input
+                    value={experienceForm.company}
+                    onChange={(e) => setExperienceForm((f) => ({ ...f, company: e.target.value }))}
+                    required
+                  />
+                </label>
+                <label>
+                  Title
+                  <input
+                    value={experienceForm.title}
+                    onChange={(e) => setExperienceForm((f) => ({ ...f, title: e.target.value }))}
+                    required
+                  />
+                </label>
+                <label>
+                  Location
+                  <input
+                    value={experienceForm.location ?? ""}
+                    onChange={(e) => setExperienceForm((f) => ({ ...f, location: e.target.value }))}
+                  />
+                </label>
+                <label>
+                  Engagement
+                  <select
+                    value={experienceForm.engagementType || "Permanent"}
+                    onChange={(e) =>
+                      setExperienceForm((f) => ({ ...f, engagementType: e.target.value }))
+                    }
+                  >
+                    {ENGAGEMENT_TYPES.map((type) => (
+                      <option key={type} value={type}>
+                        {type}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <div className="form-row">
                   <label>
-                    Job ad
-                    <textarea
-                      value={jobAd}
-                      onChange={(e) => setJobAd(e.target.value)}
-                      rows={12}
-                      required
-                      placeholder="Paste the full job advertisement here…"
-                    />
-                  </label>
-                  <p className="muted modal-hint">
-                    Company and role are detected automatically. Experience titles and descriptions are
-                    AI-tailored to the job ad — review and edit them before generating the CV.
-                  </p>
-                </div>
-                <div className="modal-footer">
-                  <div className="form-actions">
-                    <button type="button" className="btn btn-ghost" onClick={closeModal}>
-                      Cancel
-                    </button>
-                    <button type="submit" className="btn btn-primary" disabled={previewing}>
-                      {previewing ? "Analyzing…" : "Create preview"}
-                    </button>
-                  </div>
-                </div>
-              </form>
-            ) : (
-              draft && (
-                <>
-                  <div className="modal-body">
-                    <div className="modal-preview">
-                  <div className="form-row">
-                    <label>
-                      Company
-                      <input
-                        value={draft.company}
-                        onChange={(e) => setDraft({ ...draft, company: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      Role title
-                      <input
-                        value={draft.roleTitle}
-                        onChange={(e) => setDraft({ ...draft, roleTitle: e.target.value })}
-                      />
-                    </label>
-                  </div>
-
-                  <label>
-                    Summary
-                    <textarea
-                      value={draft.summary ?? ""}
-                      onChange={(e) => setDraft({ ...draft, summary: e.target.value })}
-                      rows={4}
-                    />
-                  </label>
-
-                  <label>
-                    Skills (comma-separated)
+                    Start
                     <input
-                      value={draft.skills.join(", ")}
-                      onChange={(e) =>
-                        setDraft({
-                          ...draft,
-                          skills: e.target.value
-                            .split(",")
-                            .map((s) => s.trim())
-                            .filter(Boolean)
-                        })
-                      }
+                      type="month"
+                      value={experienceForm.startDate ?? ""}
+                      onChange={(e) => setExperienceForm((f) => ({ ...f, startDate: e.target.value }))}
                     />
                   </label>
-
-                  <div className="draft-section">
-                    <h3>Experience for CV</h3>
-                    <p className="muted">Toggle roles, edit titles, dates, and descriptions before generating.</p>
-                    <ul className="draft-list">
-                      {draft.experiences.map((exp) => (
-                        <li key={exp.id} className={exp.include ? undefined : "draft-excluded"}>
-                          <label className="checkbox-row">
-                            <input
-                              type="checkbox"
-                              checked={exp.include}
-                              onChange={(e) => updateDraftExperience(exp.id, { include: e.target.checked })}
-                            />
-                            Include on CV
-                            <span className="muted">· score {Math.round(exp.relevanceScore)}</span>
-                          </label>
-                          <div className="form-row">
-                            <label>
-                              Title
-                              <input
-                                value={exp.title}
-                                onChange={(e) => updateDraftExperience(exp.id, { title: e.target.value })}
-                              />
-                            </label>
-                            <label>
-                              Company
-                              <input
-                                value={exp.company}
-                                onChange={(e) => updateDraftExperience(exp.id, { company: e.target.value })}
-                              />
-                            </label>
-                          </div>
-                          <label>
-                            Location
-                            <input
-                              value={exp.location ?? ""}
-                              onChange={(e) =>
-                                updateDraftExperience(exp.id, { location: e.target.value || null })
-                              }
-                            />
-                          </label>
-                          <label>
-                            Engagement
-                            <select
-                              value={exp.engagementType || "Permanent"}
-                              onChange={(e) =>
-                                updateDraftExperience(exp.id, { engagementType: e.target.value })
-                              }
-                            >
-                              {ENGAGEMENT_TYPES.map((type) => (
-                                <option key={type} value={type}>
-                                  {type}
-                                </option>
-                              ))}
-                            </select>
-                          </label>
-                          <div className="form-row">
-                            <label>
-                              Start
-                              <input
-                                type="month"
-                                value={toMonthInput(exp.startDate)}
-                                onChange={(e) =>
-                                  updateDraftExperience(exp.id, {
-                                    startDate: fromMonthInput(e.target.value)
-                                  })
-                                }
-                              />
-                            </label>
-                            <label>
-                              End
-                              <input
-                                type="month"
-                                value={toMonthInput(exp.endDate)}
-                                onChange={(e) =>
-                                  updateDraftExperience(exp.id, {
-                                    endDate: fromMonthInput(e.target.value)
-                                  })
-                                }
-                                disabled={exp.isCurrent}
-                              />
-                            </label>
-                          </div>
-                          <label className="checkbox-row">
-                            <input
-                              type="checkbox"
-                              checked={exp.isCurrent ?? false}
-                              onChange={(e) =>
-                                updateDraftExperience(exp.id, {
-                                  isCurrent: e.target.checked,
-                                  endDate: e.target.checked ? null : exp.endDate
-                                })
-                              }
-                            />
-                            Current role
-                          </label>
-                          <div className="field-with-action">
-                            <div className="list-row">
-                              <span className="field-label">Description</span>
-                              <button
-                                type="button"
-                                className="btn btn-ghost btn-small"
-                                onClick={() =>
-                                  aiEditExperienceId === exp.id ? closeAiEdit() : openAiEdit(exp.id)
-                                }
-                              >
-                                {aiEditExperienceId === exp.id ? "Cancel" : "AI edit"}
-                              </button>
-                            </div>
-                            <textarea
-                              value={exp.description ?? ""}
-                              onChange={(e) =>
-                                updateDraftExperience(exp.id, { description: e.target.value || null })
-                              }
-                              rows={4}
-                            />
-                            {aiEditExperienceId === exp.id && (
-                              <div className="ai-edit-row">
-                                <input
-                                  value={aiEditPrompt}
-                                  onChange={(e) => setAiEditPrompt(e.target.value)}
-                                  placeholder="e.g. emphasise leadership and cloud delivery"
-                                  disabled={aiEditingId === exp.id}
-                                  onKeyDown={(e) => {
-                                    if (e.key === "Enter") {
-                                      e.preventDefault();
-                                      void onAiEditExperience(exp.id);
-                                    }
-                                  }}
-                                />
-                                <button
-                                  type="button"
-                                  className="btn btn-primary btn-small"
-                                  disabled={aiEditingId === exp.id || !aiEditPrompt.trim()}
-                                  onClick={() => void onAiEditExperience(exp.id)}
-                                >
-                                  {aiEditingId === exp.id ? "Editing…" : "Apply"}
-                                </button>
-                              </div>
-                            )}
-                          </div>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-
-                  {draft.education.length > 0 && (
-                    <div className="draft-section">
-                      <h3>Education for CV</h3>
-                      <ul className="draft-list">
-                        {draft.education.map((edu) => (
-                          <li key={edu.id} className={edu.include ? undefined : "draft-excluded"}>
-                            <label className="checkbox-row">
-                              <input
-                                type="checkbox"
-                                checked={edu.include}
-                                onChange={(e) =>
-                                  updateDraftEducation(edu.id, { include: e.target.checked })
-                                }
-                              />
-                              Include on CV
-                            </label>
-                            <div className="form-row">
-                              <label>
-                                Institution
-                                <input
-                                  value={edu.institution}
-                                  onChange={(e) =>
-                                    updateDraftEducation(edu.id, { institution: e.target.value })
-                                  }
-                                />
-                              </label>
-                              <label>
-                                Degree
-                                <input
-                                  value={edu.degree ?? ""}
-                                  onChange={(e) =>
-                                    updateDraftEducation(edu.id, { degree: e.target.value || null })
-                                  }
-                                />
-                              </label>
-                            </div>
-                            <div className="form-row">
-                              <label>
-                                Start
-                                <input
-                                  type="month"
-                                  value={toMonthInput(edu.startDate)}
-                                  onChange={(e) =>
-                                    updateDraftEducation(edu.id, {
-                                      startDate: fromMonthInput(e.target.value)
-                                    })
-                                  }
-                                />
-                              </label>
-                              <label>
-                                End
-                                <input
-                                  type="month"
-                                  value={toMonthInput(edu.endDate)}
-                                  onChange={(e) =>
-                                    updateDraftEducation(edu.id, {
-                                      endDate: fromMonthInput(e.target.value)
-                                    })
-                                  }
-                                />
-                              </label>
-                            </div>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                    </div>
-                  </div>
-                  <div className="modal-footer">
-                  <div className="form-actions">
-                    <button
-                      type="button"
-                      className="btn btn-ghost"
-                      disabled={savingDraft || finalizing}
-                      onClick={() => void onDeleteApplication(draft.id)}
-                    >
-                      Delete
-                    </button>
-                    {draft.hasGeneratedCv && (
-                      <button
-                        type="button"
-                        className="btn btn-ghost"
-                        disabled={savingDraft || finalizing}
-                        onClick={() => void onDownloadApplicationCv(draft.id)}
-                      >
-                        Download saved CV
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      className="btn btn-ghost"
-                      disabled={savingDraft || finalizing}
-                      onClick={() => void onSaveAndClose()}
-                    >
-                      {savingDraft && !finalizing ? "Saving…" : "Save & close"}
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-primary"
-                      disabled={savingDraft || finalizing}
-                      onClick={() => void onSaveAndGenerate()}
-                    >
-                      {finalizing ? "Generating…" : draft.hasGeneratedCv ? "Regenerate CV" : "Generate CV"}
-                    </button>
-                  </div>
-                  </div>
-                </>
-              )
-            )}
+                  <label>
+                    End
+                    <input
+                      type="month"
+                      value={experienceForm.endDate ?? ""}
+                      onChange={(e) => setExperienceForm((f) => ({ ...f, endDate: e.target.value }))}
+                      disabled={experienceForm.isCurrent}
+                    />
+                  </label>
+                </div>
+                <label className="checkbox-row">
+                  <input
+                    type="checkbox"
+                    checked={experienceForm.isCurrent}
+                    onChange={(e) =>
+                      setExperienceForm((f) => ({
+                        ...f,
+                        isCurrent: e.target.checked,
+                        endDate: e.target.checked ? "" : f.endDate
+                      }))
+                    }
+                  />
+                  Current role
+                </label>
+                <label>
+                  Description
+                  <textarea
+                    value={experienceForm.description ?? ""}
+                    onChange={(e) => setExperienceForm((f) => ({ ...f, description: e.target.value }))}
+                    rows={5}
+                  />
+                </label>
+                <SkillTagsField
+                  value={experienceForm.skills ?? []}
+                  onChange={(skills) => setExperienceForm((f) => ({ ...f, skills }))}
+                />
+              </div>
+              <div className="modal-footer">
+                <div className="form-actions">
+                  <button type="button" className="btn btn-ghost" onClick={cancelExperienceEdit}>
+                    Cancel
+                  </button>
+                  <button type="submit" className="btn btn-primary" disabled={savingExperience}>
+                    {savingExperience ? "Saving…" : "Save"}
+                  </button>
+                </div>
+              </div>
+            </form>
           </div>
         </div>
       )}

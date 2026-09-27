@@ -85,6 +85,7 @@ export type WorkExperience = {
   isCurrent: boolean;
   engagementType: EngagementType | string;
   description?: string | null;
+  skills: string[];
 };
 
 export type EducationRecord = {
@@ -130,6 +131,7 @@ export type DraftExperience = {
   isCurrent: boolean;
   engagementType: EngagementType | string;
   description?: string | null;
+  skills: string[];
 };
 
 export type DraftEducation = {
@@ -160,6 +162,7 @@ export type ExperienceInput = {
   isCurrent: boolean;
   engagementType: EngagementType | string;
   description?: string | null;
+  skills?: string[];
 };
 
 export type EducationInput = {
