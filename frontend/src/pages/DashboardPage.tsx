@@ -584,6 +584,9 @@ export default function DashboardPage() {
                     {app.cvFileName ? ` · ${app.cvFileName}` : ""} ·{" "}
                     {new Date(app.updatedAt).toLocaleDateString()}
                   </span>
+                  {app.notes?.trim() ? (
+                    <span className="list-detail list-notes">{app.notes}</span>
+                  ) : null}
                 </li>
               ))}
             </ul>

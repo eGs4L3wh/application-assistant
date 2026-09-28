@@ -135,6 +135,7 @@ export default function ApplicationPage() {
     return api.updateApplicationDraft(draft.id, {
       company: draft.company,
       roleTitle: draft.roleTitle,
+      notes: draft.notes ?? "",
       summary: draft.summary ?? "",
       skills: draft.skills,
       experiences: draft.experiences.map((exp) => ({
@@ -331,6 +332,16 @@ export default function ApplicationPage() {
                   />
                 </label>
               </div>
+
+              <label>
+                Notes
+                <textarea
+                  value={draft.notes ?? ""}
+                  onChange={(e) => setDraft({ ...draft, notes: e.target.value })}
+                  rows={4}
+                  placeholder="Outcome, interview notes, follow-ups, salary, contacts…"
+                />
+              </label>
 
               <label>
                 Summary

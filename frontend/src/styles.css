@@ -386,6 +386,13 @@ textarea {
   white-space: pre-wrap;
 }
 
+.list-notes {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
 .list li:last-child {
   border-bottom: 0;
   padding-bottom: 0;

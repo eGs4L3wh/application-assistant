@@ -177,6 +177,7 @@ export type EducationInput = {
 export type UpdateDraftPayload = {
   company?: string;
   roleTitle?: string;
+  notes?: string;
   summary?: string;
   skills?: string[];
   experiences?: DraftExperience[];
