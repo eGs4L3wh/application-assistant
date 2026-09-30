@@ -5,6 +5,7 @@ using ApplicationAssistant.Api.Data;
 using ApplicationAssistant.Api.Models;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.Google;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.Extensions.FileProviders;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
@@ -42,6 +43,13 @@ if (args.Any(a => string.Equals(a, "extract-experience-skills", StringComparison
 }
 
 var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedProto | ForwardedHeaders.XForwardedHost;
+    options.KnownNetworks.Clear();
+    options.KnownProxies.Clear();
+});
 
 var frontendOrigin = builder.Configuration["Frontend:Origin"] ?? "http://localhost:5173";
 var googleClientId = builder.Configuration["Authentication:Google:ClientId"] ?? "";
@@ -136,6 +144,8 @@ builder.Services.AddCors(options =>
 });
 
 var app = builder.Build();
+
+app.UseForwardedHeaders();
 
 using (var scope = app.Services.CreateScope())
 {
