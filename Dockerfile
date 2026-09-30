@@ -22,5 +22,4 @@ COPY --from=backend-build /app/publish ./
 COPY --from=frontend-build /src/frontend/dist ./wwwroot
 ENV ASPNETCORE_URLS=http://0.0.0.0:8080
 EXPOSE 8080
-VOLUME ["/app/uploads"]
 ENTRYPOINT ["dotnet", "ApplicationAssistant.Api.dll"]
