@@ -49,11 +49,11 @@ export default function DashboardPage() {
     }
   }
 
-  async function onDownloadApplicationCv(id: string) {
+  async function onDownloadApplicationCv(id: string, savedName?: string | null) {
     setError(null);
     try {
       const { blob, fileName } = await api.downloadApplicationCv(id);
-      downloadBlob(blob, fileName);
+      downloadBlob(blob, savedName?.trim() || fileName);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not download CV");
     }
@@ -89,7 +89,7 @@ export default function DashboardPage() {
           <Link to="/profile" className="btn btn-ghost btn-small">
             Profile
           </Link>
-          <button type="button" className="btn btn-ghost" onClick={() => void logout()}>
+          <button type="button" className="btn btn-ghost btn-small" onClick={() => void logout()}>
             Sign out
           </button>
         </div>
@@ -153,7 +153,7 @@ export default function DashboardPage() {
                       <button
                         type="button"
                         className="btn btn-ghost btn-small"
-                        onClick={() => void onDownloadApplicationCv(app.id)}
+                        onClick={() => void onDownloadApplicationCv(app.id, app.cvFileName)}
                       >
                         Download CV
                       </button>

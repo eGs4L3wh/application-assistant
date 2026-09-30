@@ -210,7 +210,7 @@ export default function ApplicationPage() {
     setError(null);
     try {
       const { blob, fileName } = await api.downloadApplicationCv(draft.id);
-      downloadBlob(blob, fileName);
+      downloadBlob(blob, draft.cvFileName?.trim() || fileName);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not download CV");
     }
@@ -249,7 +249,7 @@ export default function ApplicationPage() {
           <Link to="/profile" className="btn btn-ghost btn-small">
             Profile
           </Link>
-          <button type="button" className="btn btn-ghost" onClick={() => void logout()}>
+          <button type="button" className="btn btn-ghost btn-small" onClick={() => void logout()}>
             Sign out
           </button>
         </div>

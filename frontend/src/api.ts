@@ -28,6 +28,25 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
+function fileNameFromContentDisposition(disposition: string): string | null {
+  const encoded = /filename\*\s*=\s*(?:UTF-8''|utf-8'')([^;]+)/i.exec(disposition);
+  if (encoded?.[1]) {
+    const raw = encoded[1].trim().replace(/^"|"$/g, "");
+    try {
+      return decodeURIComponent(raw);
+    } catch {
+      return raw;
+    }
+  }
+
+  const quoted = /filename\s*=\s*"([^"]+)"/i.exec(disposition);
+  if (quoted?.[1]) return quoted[1].trim();
+
+  const plain = /filename\s*=\s*([^;]+)/i.exec(disposition);
+  const value = plain?.[1]?.trim().replace(/^"|"$/g, "");
+  return value || null;
+}
+
 async function requestPdf(path: string, init?: RequestInit): Promise<{ blob: Blob; fileName: string }> {
   const response = await fetch(`${API_BASE}${path}`, {
     credentials: "include",
@@ -50,8 +69,7 @@ async function requestPdf(path: string, init?: RequestInit): Promise<{ blob: Blo
   }
 
   const disposition = response.headers.get("Content-Disposition") ?? "";
-  const match = /filename="?([^";]+)"?/i.exec(disposition);
-  const fileName = match?.[1] || "cv_download.pdf";
+  const fileName = fileNameFromContentDisposition(disposition) || "cv_download.pdf";
   const blob = await response.blob();
   return { blob, fileName };
 }

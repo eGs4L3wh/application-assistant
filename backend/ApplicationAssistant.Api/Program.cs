@@ -131,7 +131,8 @@ builder.Services.AddCors(options =>
         policy.WithOrigins(frontendOrigin.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
             .AllowAnyHeader()
             .AllowAnyMethod()
-            .AllowCredentials());
+            .AllowCredentials()
+            .WithExposedHeaders("Content-Disposition"));
 });
 
 var app = builder.Build();

@@ -268,7 +268,7 @@ export default function ProfilePage() {
           <Link to="/" className="btn btn-ghost btn-small">
             Dashboard
           </Link>
-          <button type="button" className="btn btn-ghost" onClick={() => void logout()}>
+          <button type="button" className="btn btn-ghost btn-small" onClick={() => void logout()}>
             Sign out
           </button>
         </div>
@@ -280,7 +280,7 @@ export default function ProfilePage() {
         error ? null : <p className="muted">Loading profile…</p>
       ) : (
         <>
-          <section className="panel">
+          <section className="panel credits-panel">
             <div className="panel-header">
               <h2>Credits</h2>
             </div>
