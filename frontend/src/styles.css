@@ -281,6 +281,10 @@ textarea {
   width: 100%;
 }
 
+.action-card-unavailable {
+  cursor: default;
+}
+
 .action-title {
   font-family: var(--font-display);
   font-size: 2rem;
@@ -390,6 +394,12 @@ textarea {
 
 .contact-panel {
   margin-bottom: 1rem;
+}
+
+.credits-value {
+  color: var(--ink);
+  font-size: 1.35rem;
+  font-variant-numeric: tabular-nums;
 }
 
 .list {

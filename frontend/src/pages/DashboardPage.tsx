@@ -10,6 +10,7 @@ export default function DashboardPage() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const [experienceCount, setExperienceCount] = useState(0);
+  const [credits, setCredits] = useState(0);
   const [applications, setApplications] = useState<ApplicationItem[]>([]);
   const [loadedOnce, setLoadedOnce] = useState(false);
   const [showAllApplications, setShowAllApplications] = useState(false);
@@ -21,6 +22,7 @@ export default function DashboardPage() {
       const [appList, profile] = await Promise.all([api.listApplications(), api.getProfile()]);
       setApplications(appList);
       setExperienceCount(profile.experience.length);
+      setCredits(profile.credits);
       setLoadedOnce(true);
       setError(null);
     } catch (err) {
@@ -116,6 +118,11 @@ export default function DashboardPage() {
           />
           <span className="btn btn-primary">{uploading ? "Parsing…" : "Choose file"}</span>
         </label>
+      ) : credits < 1 ? (
+        <div className="action-card hero-primary action-card-unavailable">
+          <span className="action-title">Start a new application</span>
+          <span className="action-copy">You need a credit before you can start an application.</span>
+        </div>
       ) : (
         <button
           type="button"
@@ -123,7 +130,10 @@ export default function DashboardPage() {
           onClick={() => navigate("/applications/new")}
         >
           <span className="action-title">Start a new application</span>
-          <span className="action-copy">Paste a job ad, review the tailored draft, then download your CV.</span>
+          <span className="action-copy">
+            Paste a job ad, review the tailored draft, then download your CV. Uses 1 credit ({credits}{" "}
+            left).
+          </span>
           <span className="btn btn-primary">Start</span>
         </button>
       )}

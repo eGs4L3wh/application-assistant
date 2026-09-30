@@ -30,6 +30,24 @@ export default function ApplicationPage() {
   const [aiEditPrompt, setAiEditPrompt] = useState("");
   const [aiEditingId, setAiEditingId] = useState<string | null>(null);
   const [timelineEditId, setTimelineEditId] = useState<string | null>(null);
+  const [credits, setCredits] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!isNew) return;
+    let cancelled = false;
+    void api.getProfile()
+      .then((profile) => {
+        if (!cancelled) setCredits(profile.credits);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : "Could not load credits");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isNew]);
 
   useEffect(() => {
     if (isNew) {
@@ -65,7 +83,7 @@ export default function ApplicationPage() {
 
   async function onCreatePreview(event: FormEvent) {
     event.preventDefault();
-    if (previewing || !jobAd.trim()) return;
+    if (previewing || !jobAd.trim() || credits === null || credits < 1) return;
     setPreviewing(true);
     setError(null);
     try {
@@ -258,10 +276,16 @@ export default function ApplicationPage() {
                 onChange={(e) => setJobAd(e.target.value)}
                 rows={16}
                 required
-                disabled={previewing}
+                disabled={previewing || credits === 0}
                 placeholder="Paste the full job advertisement here…"
               />
             </label>
+            {credits === 0 && (
+              <p className="muted">You need a credit before you can start an application.</p>
+            )}
+            {credits !== null && credits > 0 && (
+              <p className="muted">Uses 1 credit. You have {credits} left.</p>
+            )}
             {previewing && (
               <div className="busy-banner" role="status" aria-live="polite">
                 <span className="spinner" aria-hidden="true" />
@@ -282,7 +306,7 @@ export default function ApplicationPage() {
               >
                 Cancel
               </Link>
-              <button type="submit" className="btn btn-primary" disabled={previewing}>
+              <button type="submit" className="btn btn-primary" disabled={previewing || credits === null || credits < 1}>
                 {previewing ? (
                   <>
                     <span className="spinner spinner-on-dark" aria-hidden="true" />

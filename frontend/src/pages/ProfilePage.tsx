@@ -70,6 +70,7 @@ export default function ProfilePage() {
   const [education, setEducation] = useState<EducationRecord[]>([]);
   const [contactEmail, setContactEmail] = useState("");
   const [contactPhone, setContactPhone] = useState("");
+  const [credits, setCredits] = useState(0);
   const [savingContact, setSavingContact] = useState(false);
   const [loadedOnce, setLoadedOnce] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -87,6 +88,7 @@ export default function ProfilePage() {
       setCvs(cvList);
       setContactEmail(profile.email ?? "");
       setContactPhone(profile.phone ?? "");
+      setCredits(profile.credits);
       setExperience(profile.experience);
       setEducation(profile.education);
       setLoadedOnce(true);
@@ -278,6 +280,17 @@ export default function ProfilePage() {
         error ? null : <p className="muted">Loading profile…</p>
       ) : (
         <>
+          <section className="panel">
+            <div className="panel-header">
+              <h2>Credits</h2>
+            </div>
+            <p className="muted">
+              <strong className="credits-value">{credits}</strong>
+              {" "}
+              remaining. Every new application uses one credit.
+            </p>
+          </section>
+
           <section className="panel contact-panel">
             <div className="panel-header">
               <h2>Contact</h2>

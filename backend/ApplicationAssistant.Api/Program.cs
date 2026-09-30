@@ -112,6 +112,7 @@ builder.Services.AddAuthentication(options =>
                     GoogleId = googleId,
                     Email = email,
                     DisplayName = name ?? email,
+                    Credits = 1,
                     CreatedAt = DateTimeOffset.UtcNow
                 };
                 await db.Users.InsertOneAsync(user);

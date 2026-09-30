@@ -24,6 +24,7 @@ public class ProfileController(MongoDbContext db) : ControllerBase
         {
             email = user.GetCvEmail(),
             phone = user.Phone ?? string.Empty,
+            credits = user.Credits,
             experience = ProfileMerge.OrderExperience(user.Experience).Select(ToExperienceResponse),
             education = ProfileMerge.OrderEducation(user.Education).Select(ToEducationResponse)
         });

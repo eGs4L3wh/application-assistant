@@ -14,6 +14,8 @@ public class AppUser
     public string ContactEmail { get; set; } = string.Empty;
     public string Phone { get; set; } = string.Empty;
     public string DisplayName { get; set; } = string.Empty;
+    /// <summary>Application starts remaining. New signups begin with 1.</summary>
+    public int Credits { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
     public List<WorkExperience> Experience { get; set; } = [];
     public List<EducationRecord> Education { get; set; } = [];

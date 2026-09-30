@@ -102,6 +102,7 @@ export type EducationRecord = {
 export type Profile = {
   email: string;
   phone: string;
+  credits: number;
   experience: WorkExperience[];
   education: EducationRecord[];
 };

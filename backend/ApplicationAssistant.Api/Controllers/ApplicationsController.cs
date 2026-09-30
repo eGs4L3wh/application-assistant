@@ -31,16 +31,41 @@ public class ApplicationsController(MongoDbContext db, ICvGenerator cvGenerator,
             return BadRequest(new { error = "Add experience or education to your profile before generating a CV." });
         }
 
-        var fullName = string.IsNullOrWhiteSpace(user.DisplayName) ? user.Email : user.DisplayName;
-        var draft = await cvGenerator.GenerateAsync(new CvGenerationRequest
+        var charged = await db.Users.FindOneAndUpdateAsync(
+            u => u.Id == userId.Value && u.Credits > 0,
+            Builders<AppUser>.Update.Inc(u => u.Credits, -1),
+            new FindOneAndUpdateOptions<AppUser, AppUser> { ReturnDocument = ReturnDocument.After },
+            ct);
+        if (charged is null)
         {
-            JobAd = request.JobAd.Trim(),
-            FullName = fullName,
-            Email = user.GetCvEmail(),
-            Phone = string.IsNullOrWhiteSpace(user.Phone) ? null : user.Phone.Trim(),
-            Experiences = user.Experience.Select(ToSourceExperience).ToList(),
-            Education = user.Education.Select(ToSourceEducation).ToList()
-        }, ct);
+            return StatusCode(StatusCodes.Status402PaymentRequired, new
+            {
+                error = "You need a credit to start an application."
+            });
+        }
+
+        CvDraft draft;
+        try
+        {
+            var fullName = string.IsNullOrWhiteSpace(charged.DisplayName) ? charged.Email : charged.DisplayName;
+            draft = await cvGenerator.GenerateAsync(new CvGenerationRequest
+            {
+                JobAd = request.JobAd.Trim(),
+                FullName = fullName,
+                Email = charged.GetCvEmail(),
+                Phone = string.IsNullOrWhiteSpace(charged.Phone) ? null : charged.Phone.Trim(),
+                Experiences = charged.Experience.Select(ToSourceExperience).ToList(),
+                Education = charged.Education.Select(ToSourceEducation).ToList()
+            }, ct);
+        }
+        catch
+        {
+            await db.Users.UpdateOneAsync(
+                u => u.Id == userId.Value,
+                Builders<AppUser>.Update.Inc(u => u.Credits, 1),
+                cancellationToken: CancellationToken.None);
+            throw;
+        }
 
         var now = DateTimeOffset.UtcNow;
         var company = string.IsNullOrWhiteSpace(draft.TargetCompany) ? "Unknown company" : draft.TargetCompany.Trim();
