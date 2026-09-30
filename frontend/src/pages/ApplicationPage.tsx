@@ -228,6 +228,9 @@ export default function ApplicationPage() {
           <Link to="/" className="btn btn-ghost btn-small">
             Dashboard
           </Link>
+          <Link to="/profile" className="btn btn-ghost btn-small">
+            Profile
+          </Link>
           <button type="button" className="btn btn-ghost" onClick={() => void logout()}>
             Sign out
           </button>

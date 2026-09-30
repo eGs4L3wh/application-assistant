@@ -1,102 +1,27 @@
-import { useEffect, useState, type FormEvent } from "react";
-import { useNavigate } from "react-router-dom";
-import {
-  api,
-  ENGAGEMENT_TYPES,
-  type ApplicationItem,
-  type CvItem,
-  type EducationInput,
-  type EducationRecord,
-  type ExperienceInput,
-  type WorkExperience
-} from "../api";
+import { useEffect, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import { api, type ApplicationItem } from "../api";
 import { useAuth } from "../auth/AuthContext";
-import { SkillTags, SkillTagsField } from "../components/SkillTagsField";
-import { formatDateRange, fromMonthInput, toMonthInput } from "../lib/dates";
 import { downloadBlob } from "../lib/download";
 
-function emptyExperienceForm(): ExperienceInput {
-  return {
-    company: "",
-    title: "",
-    location: "",
-    startDate: "",
-    endDate: "",
-    isCurrent: false,
-    engagementType: "Permanent",
-    description: "",
-    skills: []
-  };
-}
-
-function toExperienceForm(item: WorkExperience): ExperienceInput {
-  return {
-    company: item.company,
-    title: item.title,
-    location: item.location ?? "",
-    startDate: toMonthInput(item.startDate),
-    endDate: toMonthInput(item.endDate),
-    isCurrent: item.isCurrent,
-    engagementType: item.engagementType || "Permanent",
-    description: item.description ?? "",
-    skills: item.skills ?? []
-  };
-}
-
-function emptyEducationForm(): EducationInput {
-  return {
-    institution: "",
-    degree: "",
-    fieldOfStudy: "",
-    startDate: "",
-    endDate: "",
-    description: ""
-  };
-}
-
-function toEducationForm(item: EducationRecord): EducationInput {
-  return {
-    institution: item.institution,
-    degree: item.degree ?? "",
-    fieldOfStudy: item.fieldOfStudy ?? "",
-    startDate: toMonthInput(item.startDate),
-    endDate: toMonthInput(item.endDate),
-    description: item.description ?? ""
-  };
-}
+const RECENT_APPLICATION_LIMIT = 3;
 
 export default function DashboardPage() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
-  const [cvs, setCvs] = useState<CvItem[]>([]);
-  const [experience, setExperience] = useState<WorkExperience[]>([]);
-  const [education, setEducation] = useState<EducationRecord[]>([]);
-  const [contactEmail, setContactEmail] = useState("");
-  const [contactPhone, setContactPhone] = useState("");
-  const [savingContact, setSavingContact] = useState(false);
+  const [experienceCount, setExperienceCount] = useState(0);
   const [applications, setApplications] = useState<ApplicationItem[]>([]);
+  const [loadedOnce, setLoadedOnce] = useState(false);
+  const [showAllApplications, setShowAllApplications] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
-  const [editingExperienceId, setEditingExperienceId] = useState<string | "new" | null>(null);
-  const [experienceForm, setExperienceForm] = useState<ExperienceInput>(emptyExperienceForm());
-  const [savingExperience, setSavingExperience] = useState(false);
-  const [editingEducationId, setEditingEducationId] = useState<string | "new" | null>(null);
-  const [educationForm, setEducationForm] = useState<EducationInput>(emptyEducationForm());
-  const [savingEducation, setSavingEducation] = useState(false);
 
   async function load() {
     try {
-      const [cvList, appList, profile] = await Promise.all([
-        api.listCvs(),
-        api.listApplications(),
-        api.getProfile()
-      ]);
-      setCvs(cvList);
+      const [appList, profile] = await Promise.all([api.listApplications(), api.getProfile()]);
       setApplications(appList);
-      setContactEmail(profile.email ?? "");
-      setContactPhone(profile.phone ?? "");
-      setExperience(profile.experience);
-      setEducation(profile.education);
+      setExperienceCount(profile.experience.length);
+      setLoadedOnce(true);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load dashboard");
@@ -145,145 +70,11 @@ export default function DashboardPage() {
     }
   }
 
-  function startCreateExperience() {
-    setError(null);
-    setEditingExperienceId("new");
-    setExperienceForm(emptyExperienceForm());
-  }
-
-  async function onSaveContact(event: FormEvent) {
-    event.preventDefault();
-    setSavingContact(true);
-    setError(null);
-    try {
-      const updated = await api.updateContact({
-        email: contactEmail.trim(),
-        phone: contactPhone.trim()
-      });
-      setContactEmail(updated.email ?? "");
-      setContactPhone(updated.phone ?? "");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not save contact details");
-    } finally {
-      setSavingContact(false);
-    }
-  }
-
-  function startEditExperience(item: WorkExperience) {
-    setError(null);
-    setEditingExperienceId(item.id);
-    setExperienceForm(toExperienceForm(item));
-  }
-
-  function cancelExperienceEdit() {
-    setEditingExperienceId(null);
-    setExperienceForm(emptyExperienceForm());
-    setError(null);
-  }
-
-  async function onSaveExperience(event: FormEvent) {
-    event.preventDefault();
-    setSavingExperience(true);
-    setError(null);
-    try {
-      const payload: ExperienceInput = {
-        company: experienceForm.company.trim(),
-        title: experienceForm.title.trim(),
-        location: experienceForm.location?.trim() || null,
-        startDate: fromMonthInput(experienceForm.startDate ?? ""),
-        endDate: experienceForm.isCurrent ? null : fromMonthInput(experienceForm.endDate ?? ""),
-        isCurrent: experienceForm.isCurrent,
-        engagementType: experienceForm.engagementType || "Permanent",
-        description: experienceForm.description?.trim() || null,
-        skills: experienceForm.skills ?? []
-      };
-
-      if (editingExperienceId === "new") {
-        await api.createExperience(payload);
-      } else if (editingExperienceId) {
-        await api.updateExperience(editingExperienceId, payload);
-      }
-
-      cancelExperienceEdit();
-      await load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not save experience");
-    } finally {
-      setSavingExperience(false);
-    }
-  }
-
-  async function onDeleteExperience(id: string) {
-    if (!window.confirm("Delete this experience entry?")) return;
-    setError(null);
-    try {
-      await api.deleteExperience(id);
-      if (editingExperienceId === id) {
-        cancelExperienceEdit();
-      }
-      await load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not delete experience");
-    }
-  }
-
-  function startCreateEducation() {
-    setEditingEducationId("new");
-    setEducationForm(emptyEducationForm());
-  }
-
-  function startEditEducation(item: EducationRecord) {
-    setEditingEducationId(item.id);
-    setEducationForm(toEducationForm(item));
-  }
-
-  function cancelEducationEdit() {
-    setEditingEducationId(null);
-    setEducationForm(emptyEducationForm());
-  }
-
-  async function onSaveEducation(event: FormEvent) {
-    event.preventDefault();
-    setSavingEducation(true);
-    setError(null);
-    try {
-      const payload: EducationInput = {
-        institution: educationForm.institution.trim(),
-        degree: educationForm.degree?.trim() || null,
-        fieldOfStudy: educationForm.fieldOfStudy?.trim() || null,
-        startDate: fromMonthInput(educationForm.startDate ?? ""),
-        endDate: fromMonthInput(educationForm.endDate ?? ""),
-        description: educationForm.description?.trim() || null
-      };
-
-      if (editingEducationId === "new") {
-        await api.createEducation(payload);
-      } else if (editingEducationId) {
-        await api.updateEducation(editingEducationId, payload);
-      }
-
-      cancelEducationEdit();
-      await load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not save education");
-    } finally {
-      setSavingEducation(false);
-    }
-  }
-
-  async function onDeleteEducation(id: string) {
-    if (!window.confirm("Delete this education entry?")) return;
-    setError(null);
-    try {
-      await api.deleteEducation(id);
-      if (editingEducationId === id) {
-        cancelEducationEdit();
-      }
-      await load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not delete education");
-    }
-  }
+  const needsCv = experienceCount === 0;
+  const visibleApplications = showAllApplications
+    ? applications
+    : applications.slice(0, RECENT_APPLICATION_LIMIT);
+  const hasMoreApplications = applications.length > RECENT_APPLICATION_LIMIT;
 
   return (
     <div className="dash">
@@ -292,19 +83,30 @@ export default function DashboardPage() {
           <p className="brand">Application Assistant</p>
           <p className="muted">Signed in as {user?.name ?? user?.email}</p>
         </div>
-        <button type="button" className="btn btn-ghost" onClick={() => void logout()}>
-          Sign out
-        </button>
+        <div className="app-page-header-actions">
+          <Link to="/profile" className="btn btn-ghost btn-small">
+            Profile
+          </Link>
+          <button type="button" className="btn btn-ghost" onClick={() => void logout()}>
+            Sign out
+          </button>
+        </div>
       </header>
 
       {error && <div className="banner error">{error}</div>}
 
-      <section className="hero-actions">
-        <label className="action-card">
+      {!loadedOnce ? (
+        error ? null : (
+          <div className="busy-indicator" role="status" aria-label="Loading dashboard">
+            <span className="spinner" aria-hidden="true" />
+          </div>
+        )
+      ) : needsCv ? (
+        <label className="action-card hero-primary">
           <span className="action-title">Upload your CV</span>
           <span className="action-copy">
-            PDF or Word, up to 10 MB. We store the file and extract contact details, experience &amp;
-            education.
+            PDF or Word, up to 10 MB. We store the file and extract your work experience so you can
+            start applying.
           </span>
           <input
             type="file"
@@ -312,413 +114,77 @@ export default function DashboardPage() {
             disabled={uploading}
             onChange={(e) => void onUpload(e.target.files)}
           />
-          <span className="btn btn-secondary">{uploading ? "Parsing…" : "Choose file"}</span>
+          <span className="btn btn-primary">{uploading ? "Parsing…" : "Choose file"}</span>
         </label>
-
+      ) : (
         <button
           type="button"
-          className="action-card action-card-button"
+          className="action-card action-card-button hero-primary"
           onClick={() => navigate("/applications/new")}
         >
-          <span className="action-title">New application</span>
+          <span className="action-title">Start a new application</span>
           <span className="action-copy">Paste a job ad, review the tailored draft, then download your CV.</span>
           <span className="btn btn-primary">Start</span>
         </button>
-      </section>
+      )}
 
-      <section className="panel contact-panel">
-        <div className="panel-header">
-          <h2>Contact</h2>
-        </div>
-        <form className="form profile-form" onSubmit={(e) => void onSaveContact(e)}>
-          <div className="form-row">
-            <label>
-              Email
-              <input
-                type="email"
-                value={contactEmail}
-                onChange={(e) => setContactEmail(e.target.value)}
-                placeholder="you@example.com"
-                autoComplete="email"
-              />
-            </label>
-            <label>
-              Phone
-              <input
-                type="tel"
-                value={contactPhone}
-                onChange={(e) => setContactPhone(e.target.value)}
-                placeholder="+44 …"
-                autoComplete="tel"
-              />
-            </label>
-          </div>
-          <div className="form-actions">
-            <button type="submit" className="btn btn-primary" disabled={savingContact}>
-              {savingContact ? "Saving…" : "Save contact"}
-            </button>
-          </div>
-        </form>
-      </section>
-
-      <section className="grid-two">
-        <div className="panel">
-          <div className="panel-header">
-            <h2>Experience</h2>
-            <button type="button" className="btn btn-ghost btn-small" onClick={startCreateExperience}>
-              Add
-            </button>
-          </div>
-
-          {experience.length === 0 ? (
-            <p className="muted">Upload a CV or add experience manually.</p>
-          ) : (
-            <ul className="list">
-              {experience.map((item) => (
-                <li key={item.id}>
-                  <div className="list-row">
-                    <strong>
-                      {item.title}
-                      {item.company ? ` · ${item.company}` : ""}
-                    </strong>
-                    <div className="list-actions">
+      {loadedOnce && applications.length > 0 && (
+        <section className="panel">
+          <h2>Recent applications</h2>
+          <ul className="list">
+            {visibleApplications.map((app) => (
+              <li key={app.id}>
+                <div className="list-row">
+                  <strong>
+                    {app.roleTitle} · {app.company}
+                  </strong>
+                  <div className="list-actions">
+                    {app.hasGeneratedCv && (
                       <button
                         type="button"
                         className="btn btn-ghost btn-small"
-                        onClick={() => startEditExperience(item)}
+                        onClick={() => void onDownloadApplicationCv(app.id)}
                       >
-                        Edit
+                        Download CV
                       </button>
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-small"
-                        onClick={() => void onDeleteExperience(item.id)}
-                      >
-                        Delete
-                      </button>
-                    </div>
+                    )}
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-small"
+                      onClick={() => navigate(`/applications/${app.id}`)}
+                    >
+                      Open
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-small"
+                      onClick={() => void onDeleteApplication(app.id)}
+                    >
+                      Delete
+                    </button>
                   </div>
-                  <span className="muted">
-                    {formatDateRange(item.startDate, item.endDate, item.isCurrent)}
-                    {item.engagementType ? ` · ${item.engagementType}` : ""}
-                    {item.location ? ` · ${item.location}` : ""}
-                  </span>
-                  {item.description && <span className="list-detail">{item.description}</span>}
-                  <SkillTags skills={item.skills ?? []} />
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-
-        <div className="panel">
-          <div className="panel-header">
-            <h2>Education</h2>
-            <button type="button" className="btn btn-ghost btn-small" onClick={startCreateEducation}>
-              Add
-            </button>
-          </div>
-
-          {editingEducationId !== null && (
-            <form className="form profile-form" onSubmit={(e) => void onSaveEducation(e)}>
-              <h3>{editingEducationId === "new" ? "New education" : "Edit education"}</h3>
-              <label>
-                Institution
-                <input
-                  value={educationForm.institution}
-                  onChange={(e) => setEducationForm((f) => ({ ...f, institution: e.target.value }))}
-                  required
-                />
-              </label>
-              <label>
-                Degree
-                <input
-                  value={educationForm.degree ?? ""}
-                  onChange={(e) => setEducationForm((f) => ({ ...f, degree: e.target.value }))}
-                />
-              </label>
-              <label>
-                Field of study
-                <input
-                  value={educationForm.fieldOfStudy ?? ""}
-                  onChange={(e) => setEducationForm((f) => ({ ...f, fieldOfStudy: e.target.value }))}
-                />
-              </label>
-              <div className="form-row">
-                <label>
-                  Start
-                  <input
-                    type="month"
-                    value={educationForm.startDate ?? ""}
-                    onChange={(e) => setEducationForm((f) => ({ ...f, startDate: e.target.value }))}
-                  />
-                </label>
-                <label>
-                  End
-                  <input
-                    type="month"
-                    value={educationForm.endDate ?? ""}
-                    onChange={(e) => setEducationForm((f) => ({ ...f, endDate: e.target.value }))}
-                  />
-                </label>
-              </div>
-              <label>
-                Description
-                <textarea
-                  value={educationForm.description ?? ""}
-                  onChange={(e) => setEducationForm((f) => ({ ...f, description: e.target.value }))}
-                  rows={3}
-                />
-              </label>
-              <div className="form-actions">
-                <button type="button" className="btn btn-ghost" onClick={cancelEducationEdit}>
-                  Cancel
-                </button>
-                <button type="submit" className="btn btn-primary" disabled={savingEducation}>
-                  {savingEducation ? "Saving…" : "Save"}
-                </button>
-              </div>
-            </form>
-          )}
-
-          {education.length === 0 ? (
-            <p className="muted">Upload a CV or add education manually.</p>
-          ) : (
-            <ul className="list">
-              {education.map((item) => (
-                <li key={item.id}>
-                  <div className="list-row">
-                    <strong>
-                      {item.institution}
-                      {item.degree ? ` · ${item.degree}` : ""}
-                    </strong>
-                    <div className="list-actions">
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-small"
-                        onClick={() => startEditEducation(item)}
-                      >
-                        Edit
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-small"
-                        onClick={() => void onDeleteEducation(item.id)}
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  </div>
-                  <span className="muted">
-                    {formatDateRange(item.startDate, item.endDate)}
-                    {item.fieldOfStudy ? ` · ${item.fieldOfStudy}` : ""}
-                  </span>
-                  {item.description && <span className="list-detail">{item.description}</span>}
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      </section>
-
-      <section className="grid-two">
-        <div className="panel">
-          <h2>Your CVs</h2>
-          {cvs.length === 0 ? (
-            <p className="muted">No CVs uploaded yet.</p>
-          ) : (
-            <ul className="list">
-              {cvs.map((cv) => (
-                <li key={cv.id}>
-                  <strong>{cv.fileName}</strong>
-                  <span className="muted">
-                    {(cv.sizeBytes / 1024).toFixed(1)} KB ·{" "}
-                    {new Date(cv.uploadedAt).toLocaleDateString()}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-
-        <div className="panel">
-          <h2>Applications</h2>
-          {applications.length === 0 ? (
-            <p className="muted">No applications yet. Start one above to save a draft.</p>
-          ) : (
-            <ul className="list">
-              {applications.map((app) => (
-                <li key={app.id}>
-                  <div className="list-row">
-                    <strong>
-                      {app.roleTitle} · {app.company}
-                    </strong>
-                    <div className="list-actions">
-                      {app.hasGeneratedCv && (
-                        <button
-                          type="button"
-                          className="btn btn-ghost btn-small"
-                          onClick={() => void onDownloadApplicationCv(app.id)}
-                        >
-                          Download CV
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-small"
-                        onClick={() => navigate(`/applications/${app.id}`)}
-                      >
-                        Open
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-small"
-                        onClick={() => void onDeleteApplication(app.id)}
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  </div>
-                  <span className="muted">
-                    {app.status}
-                    {app.cvFileName ? ` · ${app.cvFileName}` : ""} ·{" "}
-                    {new Date(app.updatedAt).toLocaleDateString()}
-                  </span>
-                  {app.notes?.trim() ? (
-                    <span className="list-detail list-notes">{app.notes}</span>
-                  ) : null}
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      </section>
-
-
-      {editingExperienceId !== null && (
-        <div
-          className="modal-backdrop"
-          role="presentation"
-          onClick={cancelExperienceEdit}
-        >
-          <div
-            className="modal modal-compact"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="experience-modal-title"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="modal-header">
-              <div>
-                <h2 id="experience-modal-title">
-                  {editingExperienceId === "new" ? "New experience" : "Edit experience"}
-                </h2>
-              </div>
-              <button type="button" className="btn btn-ghost btn-small" onClick={cancelExperienceEdit}>
-                Close
+                </div>
+                <span className="muted">
+                  {app.status}
+                  {app.cvFileName ? ` · ${app.cvFileName}` : ""} ·{" "}
+                  {new Date(app.updatedAt).toLocaleDateString()}
+                </span>
+                {app.notes?.trim() ? <span className="list-detail list-notes">{app.notes}</span> : null}
+              </li>
+            ))}
+          </ul>
+          {hasMoreApplications && (
+            <div className="see-more">
+              <button
+                type="button"
+                className="btn btn-ghost btn-small"
+                onClick={() => setShowAllApplications((open) => !open)}
+              >
+                {showAllApplications ? "Show less" : "See more"}
               </button>
             </div>
-
-            <form className="modal-form" onSubmit={(e) => void onSaveExperience(e)}>
-              <div className="modal-body form">
-                {error && <div className="banner error">{error}</div>}
-                <label>
-                  Company
-                  <input
-                    value={experienceForm.company}
-                    onChange={(e) => setExperienceForm((f) => ({ ...f, company: e.target.value }))}
-                    required
-                  />
-                </label>
-                <label>
-                  Title
-                  <input
-                    value={experienceForm.title}
-                    onChange={(e) => setExperienceForm((f) => ({ ...f, title: e.target.value }))}
-                    required
-                  />
-                </label>
-                <label>
-                  Location
-                  <input
-                    value={experienceForm.location ?? ""}
-                    onChange={(e) => setExperienceForm((f) => ({ ...f, location: e.target.value }))}
-                  />
-                </label>
-                <label>
-                  Engagement
-                  <select
-                    value={experienceForm.engagementType || "Permanent"}
-                    onChange={(e) =>
-                      setExperienceForm((f) => ({ ...f, engagementType: e.target.value }))
-                    }
-                  >
-                    {ENGAGEMENT_TYPES.map((type) => (
-                      <option key={type} value={type}>
-                        {type}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <div className="form-row">
-                  <label>
-                    Start
-                    <input
-                      type="month"
-                      value={experienceForm.startDate ?? ""}
-                      onChange={(e) => setExperienceForm((f) => ({ ...f, startDate: e.target.value }))}
-                    />
-                  </label>
-                  <label>
-                    End
-                    <input
-                      type="month"
-                      value={experienceForm.endDate ?? ""}
-                      onChange={(e) => setExperienceForm((f) => ({ ...f, endDate: e.target.value }))}
-                      disabled={experienceForm.isCurrent}
-                    />
-                  </label>
-                </div>
-                <label className="checkbox-row">
-                  <input
-                    type="checkbox"
-                    checked={experienceForm.isCurrent}
-                    onChange={(e) =>
-                      setExperienceForm((f) => ({
-                        ...f,
-                        isCurrent: e.target.checked,
-                        endDate: e.target.checked ? "" : f.endDate
-                      }))
-                    }
-                  />
-                  Current role
-                </label>
-                <label>
-                  Description
-                  <textarea
-                    value={experienceForm.description ?? ""}
-                    onChange={(e) => setExperienceForm((f) => ({ ...f, description: e.target.value }))}
-                    rows={5}
-                  />
-                </label>
-                <SkillTagsField
-                  value={experienceForm.skills ?? []}
-                  onChange={(skills) => setExperienceForm((f) => ({ ...f, skills }))}
-                />
-              </div>
-              <div className="modal-footer">
-                <div className="form-actions">
-                  <button type="button" className="btn btn-ghost" onClick={cancelExperienceEdit}>
-                    Cancel
-                  </button>
-                  <button type="submit" className="btn btn-primary" disabled={savingExperience}>
-                    {savingExperience ? "Saving…" : "Save"}
-                  </button>
-                </div>
-              </div>
-            </form>
-          </div>
-        </div>
+          )}
+        </section>
       )}
     </div>
   );

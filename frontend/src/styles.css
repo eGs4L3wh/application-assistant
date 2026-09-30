@@ -104,6 +104,18 @@ textarea {
   border-color: var(--line);
 }
 
+.busy-indicator {
+  display: flex;
+  justify-content: center;
+  padding: 2.5rem 0;
+}
+
+.busy-indicator .spinner {
+  width: 1.75rem;
+  height: 1.75rem;
+  border-width: 3px;
+}
+
 .spinner {
   width: 1rem;
   height: 1rem;
@@ -219,6 +231,22 @@ textarea {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 1rem;
+}
+
+.hero-primary {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 1.5rem;
+}
+
+.hero-primary .action-copy {
+  margin-bottom: 0;
+}
+
+.hero-primary .btn {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: center;
 }
 
 .action-card {
@@ -396,6 +424,26 @@ textarea {
 .list li:last-child {
   border-bottom: 0;
   padding-bottom: 0;
+}
+
+.see-more {
+  display: flex;
+  justify-content: center;
+  margin-top: 0.35rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--line);
+}
+
+.file-button {
+  position: relative;
+  overflow: hidden;
+}
+
+.file-button input[type="file"] {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
 }
 
 .banner {
@@ -1080,7 +1128,15 @@ body.timeline-dragging .timeline-handle {
   }
 
   .hero-actions,
-  .grid-two {
+  .grid-two,
+  .hero-primary {
     grid-template-columns: 1fr;
+  }
+
+  .hero-primary .btn {
+    grid-column: auto;
+    grid-row: auto;
+    justify-self: start;
+    margin-top: 0.35rem;
   }
 }
