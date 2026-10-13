@@ -24,6 +24,7 @@ public class ProfileController(MongoDbContext db) : ControllerBase
         {
             email = user.GetCvEmail(),
             phone = user.Phone ?? string.Empty,
+            languages = user.Languages ?? [],
             credits = user.Credits,
             experience = ProfileMerge.OrderExperience(user.Experience).Select(ToExperienceResponse),
             education = ProfileMerge.OrderEducation(user.Education).Select(ToEducationResponse)
@@ -52,6 +53,32 @@ public class ProfileController(MongoDbContext db) : ControllerBase
             cancellationToken: ct);
 
         return Ok(new { email = string.IsNullOrWhiteSpace(email) ? user.Email : email, phone });
+    }
+
+    [HttpPut("languages")]
+    public async Task<ActionResult<object>> UpdateLanguages(
+        [FromBody] UpdateLanguagesRequest request,
+        CancellationToken ct)
+    {
+        var userId = User.GetAppUserId();
+        if (userId is null) return Unauthorized();
+
+        var user = await db.Users.Find(u => u.Id == userId).FirstOrDefaultAsync(ct);
+        if (user is null) return NotFound(new { error = "User profile not found." });
+
+        var languages = (request.Languages ?? [])
+            .Where(language => !string.IsNullOrWhiteSpace(language))
+            .Select(language => language.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(12)
+            .ToList();
+
+        await db.Users.UpdateOneAsync(
+            u => u.Id == userId.Value,
+            Builders<AppUser>.Update.Set(u => u.Languages, languages),
+            cancellationToken: ct);
+
+        return Ok(new { languages });
     }
 
     [HttpPost("experience")]

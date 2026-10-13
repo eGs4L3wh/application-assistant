@@ -5,7 +5,8 @@ import {
   ENGAGEMENT_TYPES,
   type ApplicationDetail,
   type DraftEducation,
-  type DraftExperience
+  type DraftExperience,
+  type RequirementCoverage
 } from "../api";
 import { ExperienceTimeline } from "../components/ExperienceTimeline";
 import { SkillTagsField } from "../components/SkillTagsField";
@@ -31,6 +32,8 @@ export default function ApplicationPage() {
   const [aiEditingId, setAiEditingId] = useState<string | null>(null);
   const [timelineEditId, setTimelineEditId] = useState<string | null>(null);
   const [credits, setCredits] = useState<number | null>(null);
+  const [coverage, setCoverage] = useState<RequirementCoverage[] | null>(null);
+  const [checkingCoverage, setCheckingCoverage] = useState(false);
 
   useEffect(() => {
     if (!isNew) return;
@@ -81,6 +84,37 @@ export default function ApplicationPage() {
     };
   }, [id, isNew]);
 
+  async function onCheckCoverage() {
+    if (!draft || checkingCoverage) return;
+    setCheckingCoverage(true);
+    setError(null);
+    try {
+      const result = await api.assessCoverage(draft.id, {
+        experiences: draft.experiences
+          .filter((exp) => exp.include)
+          .map((exp) => ({
+            company: exp.company,
+            title: exp.title,
+            description: exp.description,
+            skills: exp.skills ?? []
+          })),
+        education: draft.education
+          .filter((edu) => edu.include)
+          .map((edu) => ({
+            institution: edu.institution,
+            degree: edu.degree,
+            fieldOfStudy: edu.fieldOfStudy,
+            description: edu.description
+          }))
+      });
+      setCoverage(result.items);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not check requirement coverage");
+    } finally {
+      setCheckingCoverage(false);
+    }
+  }
+
   async function onCreatePreview(event: FormEvent) {
     event.preventDefault();
     if (previewing || !jobAd.trim() || credits === null || credits < 1) return;
@@ -96,6 +130,7 @@ export default function ApplicationPage() {
   }
 
   function updateDraftExperience(experienceId: string, patch: Partial<DraftExperience>) {
+    if ("include" in patch) setCoverage(null);
     setDraft((current) => {
       if (!current) return current;
       return {
@@ -108,6 +143,7 @@ export default function ApplicationPage() {
   }
 
   function updateDraftEducation(educationId: string, patch: Partial<DraftEducation>) {
+    if ("include" in patch) setCoverage(null);
     setDraft((current) => {
       if (!current) return current;
       return {
@@ -290,8 +326,8 @@ export default function ApplicationPage() {
               <div className="busy-banner" role="status" aria-live="polite">
                 <span className="spinner" aria-hidden="true" />
                 <div>
-                  <strong>Analyzing job ad…</strong>
-                  <p className="muted">Tailoring your experience — this can take a moment.</p>
+                  <strong>Reading requirements and drafting…</strong>
+                  <p className="muted">Extracting must-haves, then tailoring experience bullets.</p>
                 </div>
               </div>
             )}
@@ -340,6 +376,71 @@ export default function ApplicationPage() {
                 </p>
               </div>
             </header>
+
+            <section className="req-grid">
+              <article className="panel app-page-panel req-panel">
+                <div className="panel-header">
+                  <h2>Must have</h2>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-small"
+                    disabled={checkingCoverage || (draft.mustHave ?? []).length === 0}
+                    onClick={() => void onCheckCoverage()}
+                  >
+                    {checkingCoverage ? "Checking…" : "Check coverage"}
+                  </button>
+                </div>
+                {(draft.mustHave ?? []).length === 0 ? (
+                  <p className="muted">None inferred from this ad.</p>
+                ) : (
+                  <ul className="req-list">
+                    {(draft.mustHave ?? []).map((item) => (
+                      <li key={item}>
+                        <span className="req-mark req-mark-must" aria-hidden="true" />
+                        <span>{item}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {coverage && (
+                  <ul className="coverage-list">
+                    {coverage.map((item) => (
+                      <li key={item.requirement}>
+                        <div className="coverage-heading">
+                          <strong>{item.requirement}</strong>
+                          <span className={`coverage-badge coverage-${item.coverage}`}>
+                            {item.coverage}
+                          </span>
+                        </div>
+                        <p>{item.evidence}</p>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </article>
+              <article className="panel app-page-panel req-panel">
+                <h2>Nice to have</h2>
+                {(draft.niceToHave ?? []).length === 0 ? (
+                  <p className="muted">None inferred from this ad.</p>
+                ) : (
+                  <ul className="req-list">
+                    {(draft.niceToHave ?? []).map((item) => (
+                      <li key={item}>
+                        <span className="req-mark req-mark-nice" aria-hidden="true" />
+                        <span>{item}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </article>
+            </section>
+
+            {draft.jobAd && (
+              <section className="panel app-page-panel">
+                <h2>Job ad</h2>
+                <div className="job-ad">{draft.jobAd}</div>
+              </section>
+            )}
 
             <section className="panel app-page-panel">
               <div className="draft-editor">
@@ -522,7 +623,8 @@ export default function ApplicationPage() {
                               description: e.target.value || null
                             })
                           }
-                          rows={5}
+                          rows={8}
+                          placeholder={"- Built and managed a team of 5 engineers\n- Implemented payment backend integration using Kafka and event sourcing"}
                         />
                         {aiEditExperienceId === exp.id && (
                           <div className="ai-edit-row">
@@ -732,6 +834,7 @@ export default function ApplicationPage() {
                       })
                     }
                     rows={12}
+                    placeholder={"- Built and managed a team of 5 engineers\n- Implemented payment backend integration using Kafka and event sourcing"}
                   />
                   {aiEditExperienceId === timelineEditExp.id && (
                     <div className="ai-edit-row">

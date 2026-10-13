@@ -9,12 +9,52 @@ public interface ICvGenerator
     Task<ExperienceRefineResult> RefineExperienceAsync(
         ExperienceRefineRequest request,
         CancellationToken cancellationToken = default);
+    Task<RequirementCoverageResult> AssessMustHaveCoverageAsync(
+        RequirementCoverageRequest request,
+        CancellationToken cancellationToken = default);
 }
 
 public sealed class JobAdMetadata
 {
     public string Company { get; set; } = string.Empty;
     public string RoleTitle { get; set; } = string.Empty;
+    public List<string> MustHave { get; set; } = [];
+    public List<string> NiceToHave { get; set; } = [];
+}
+
+public sealed class RequirementCoverageRequest
+{
+    public required IReadOnlyList<string> MustHave { get; init; }
+    public required IReadOnlyList<CoverageExperience> Experiences { get; init; }
+    public required IReadOnlyList<CoverageEducation> Education { get; init; }
+}
+
+public sealed class CoverageExperience
+{
+    public string Company { get; init; } = string.Empty;
+    public string Title { get; init; } = string.Empty;
+    public string? Description { get; init; }
+    public List<string> Skills { get; init; } = [];
+}
+
+public sealed class CoverageEducation
+{
+    public string Institution { get; init; } = string.Empty;
+    public string? Degree { get; init; }
+    public string? FieldOfStudy { get; init; }
+    public string? Description { get; init; }
+}
+
+public sealed class RequirementCoverageResult
+{
+    public List<RequirementCoverageItem> Items { get; set; } = [];
+}
+
+public sealed class RequirementCoverageItem
+{
+    public string Requirement { get; set; } = string.Empty;
+    public string Coverage { get; set; } = "missing";
+    public string Evidence { get; set; } = string.Empty;
 }
 
 public sealed class ExperienceRefineRequest
@@ -78,6 +118,10 @@ public sealed class CvDraft
     public string? TargetCompany { get; set; }
     [JsonIgnore]
     public string? TargetRoleTitle { get; set; }
+    [JsonIgnore]
+    public List<string> MustHave { get; set; } = [];
+    [JsonIgnore]
+    public List<string> NiceToHave { get; set; } = [];
     [JsonIgnore]
     public string Summary { get; set; } = string.Empty;
     public List<string> Skills { get; set; } = [];

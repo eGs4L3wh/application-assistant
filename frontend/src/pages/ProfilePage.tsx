@@ -70,8 +70,10 @@ export default function ProfilePage() {
   const [education, setEducation] = useState<EducationRecord[]>([]);
   const [contactEmail, setContactEmail] = useState("");
   const [contactPhone, setContactPhone] = useState("");
+  const [languages, setLanguages] = useState<string[]>([]);
   const [credits, setCredits] = useState(0);
   const [savingContact, setSavingContact] = useState(false);
+  const [savingLanguages, setSavingLanguages] = useState(false);
   const [loadedOnce, setLoadedOnce] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -88,6 +90,7 @@ export default function ProfilePage() {
       setCvs(cvList);
       setContactEmail(profile.email ?? "");
       setContactPhone(profile.phone ?? "");
+      setLanguages(profile.languages ?? []);
       setCredits(profile.credits);
       setExperience(profile.experience);
       setEducation(profile.education);
@@ -132,6 +135,20 @@ export default function ProfilePage() {
       setError(err instanceof Error ? err.message : "Could not save contact details");
     } finally {
       setSavingContact(false);
+    }
+  }
+
+  async function onSaveLanguages(event: FormEvent) {
+    event.preventDefault();
+    setSavingLanguages(true);
+    setError(null);
+    try {
+      const updated = await api.updateLanguages(languages);
+      setLanguages(updated.languages ?? []);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save languages");
+    } finally {
+      setSavingLanguages(false);
     }
   }
 
@@ -291,12 +308,12 @@ export default function ProfilePage() {
             </p>
           </section>
 
-          <section className="panel contact-panel">
-            <div className="panel-header">
-              <h2>Contact</h2>
-            </div>
-            <form className="form profile-form" onSubmit={(e) => void onSaveContact(e)}>
-              <div className="form-row">
+          <section className="grid-two contact-row">
+            <div className="panel">
+              <div className="panel-header">
+                <h2>Contact</h2>
+              </div>
+              <form className="form profile-form" onSubmit={(e) => void onSaveContact(e)}>
                 <label>
                   Email
                   <input
@@ -317,13 +334,32 @@ export default function ProfilePage() {
                     autoComplete="tel"
                   />
                 </label>
+                <div className="form-actions">
+                  <button type="submit" className="btn btn-primary" disabled={savingContact}>
+                    {savingContact ? "Saving…" : "Save contact"}
+                  </button>
+                </div>
+              </form>
+            </div>
+
+            <div className="panel">
+              <div className="panel-header">
+                <h2>Languages</h2>
               </div>
-              <div className="form-actions">
-                <button type="submit" className="btn btn-primary" disabled={savingContact}>
-                  {savingContact ? "Saving…" : "Save contact"}
-                </button>
-              </div>
-            </form>
+              <form className="form profile-form" onSubmit={(e) => void onSaveLanguages(e)}>
+                <SkillTagsField
+                  label="Spoken languages"
+                  value={languages}
+                  onChange={setLanguages}
+                  placeholder="Add a language and press Enter"
+                />
+                <div className="form-actions">
+                  <button type="submit" className="btn btn-primary" disabled={savingLanguages}>
+                    {savingLanguages ? "Saving…" : "Save languages"}
+                  </button>
+                </div>
+              </form>
+            </div>
           </section>
 
           <section className="grid-two">

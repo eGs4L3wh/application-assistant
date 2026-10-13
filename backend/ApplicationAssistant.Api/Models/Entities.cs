@@ -13,6 +13,7 @@ public class AppUser
     /// <summary>Email shown on generated CVs. Falls back to <see cref="Email"/> when empty.</summary>
     public string ContactEmail { get; set; } = string.Empty;
     public string Phone { get; set; } = string.Empty;
+    public List<string> Languages { get; set; } = [];
     public string DisplayName { get; set; } = string.Empty;
     /// <summary>Application starts remaining. New signups begin with 1.</summary>
     public int Credits { get; set; }
@@ -86,6 +87,8 @@ public class JobApplication
     public string Status { get; set; } = "Draft";
     public string? Notes { get; set; }
     public string? JobAd { get; set; }
+    public List<string> MustHave { get; set; } = [];
+    public List<string> NiceToHave { get; set; } = [];
     public string? Summary { get; set; }
     public List<string> Skills { get; set; } = [];
     public List<ApplicationDraftExperience> DraftExperiences { get; set; } = [];

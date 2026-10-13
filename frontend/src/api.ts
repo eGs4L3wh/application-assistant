@@ -120,6 +120,7 @@ export type EducationRecord = {
 export type Profile = {
   email: string;
   phone: string;
+  languages: string[];
   credits: number;
   experience: WorkExperience[];
   education: EducationRecord[];
@@ -164,8 +165,16 @@ export type DraftEducation = {
   description?: string | null;
 };
 
+export type RequirementCoverage = {
+  requirement: string;
+  coverage: "covered" | "partial" | "missing" | string;
+  evidence: string;
+};
+
 export type ApplicationDetail = ApplicationItem & {
   jobAd?: string | null;
+  mustHave?: string[];
+  niceToHave?: string[];
   summary?: string | null;
   skills: string[];
   experiences: DraftExperience[];
@@ -212,6 +221,11 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(payload)
     }),
+  updateLanguages: (languages: string[]) =>
+    request<{ languages: string[] }>("/api/profile/languages", {
+      method: "PUT",
+      body: JSON.stringify({ languages })
+    }),
   createExperience: (payload: ExperienceInput) =>
     request<WorkExperience>("/api/profile/experience", {
       method: "POST",
@@ -252,6 +266,27 @@ export const api = {
   updateApplicationDraft: (id: string, payload: UpdateDraftPayload) =>
     request<ApplicationDetail>(`/api/applications/${id}`, {
       method: "PATCH",
+      body: JSON.stringify(payload)
+    }),
+  assessCoverage: (
+    id: string,
+    payload: {
+      experiences: Array<{
+        company: string;
+        title: string;
+        description?: string | null;
+        skills: string[];
+      }>;
+      education: Array<{
+        institution: string;
+        degree?: string | null;
+        fieldOfStudy?: string | null;
+        description?: string | null;
+      }>;
+    }
+  ) =>
+    request<{ items: RequirementCoverage[] }>(`/api/applications/${id}/coverage`, {
+      method: "POST",
       body: JSON.stringify(payload)
     }),
   refineExperience: (applicationId: string, experienceId: string, prompt: string) =>

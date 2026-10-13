@@ -78,6 +78,8 @@ public class ApplicationsController(MongoDbContext db, ICvGenerator cvGenerator,
             Company = company,
             RoleTitle = roleTitle,
             JobAd = request.JobAd.Trim(),
+            MustHave = draft.MustHave ?? [],
+            NiceToHave = draft.NiceToHave ?? [],
             Summary = draft.Summary,
             Skills = draft.Skills,
             DraftExperiences = draft.Experiences.Select(ToStoredExperience).ToList(),
@@ -231,6 +233,90 @@ public class ApplicationsController(MongoDbContext db, ICvGenerator cvGenerator,
         return Ok(ToDetailDto(application));
     }
 
+    [HttpPost("{id:guid}/coverage")]
+    public async Task<ActionResult<object>> AssessCoverage(
+        Guid id,
+        [FromBody] CoverageRequestBody? request,
+        CancellationToken ct)
+    {
+        var userId = User.GetAppUserId();
+        if (userId is null) return Unauthorized();
+
+        var application = await db.Applications
+            .Find(a => a.Id == id && a.UserId == userId)
+            .FirstOrDefaultAsync(ct);
+        if (application is null) return NotFound();
+
+        if (application.MustHave is not { Count: > 0 })
+        {
+            return BadRequest(new { error = "This application has no must-have requirements to check." });
+        }
+
+        var experiences = request?.Experiences?
+            .Select(e => new CoverageExperience
+            {
+                Company = e.Company?.Trim() ?? string.Empty,
+                Title = e.Title?.Trim() ?? string.Empty,
+                Description = e.Description,
+                Skills = e.Skills ?? []
+            })
+            .ToList();
+        var education = request?.Education?
+            .Select(e => new CoverageEducation
+            {
+                Institution = e.Institution?.Trim() ?? string.Empty,
+                Degree = e.Degree,
+                FieldOfStudy = e.FieldOfStudy,
+                Description = e.Description
+            })
+            .ToList();
+
+        if (experiences is null)
+        {
+            experiences = application.DraftExperiences
+                .Where(e => e.Include)
+                .Select(e => new CoverageExperience
+                {
+                    Company = e.Company,
+                    Title = e.Title,
+                    Description = e.Description,
+                    Skills = e.Skills ?? []
+                })
+                .ToList();
+        }
+
+        if (education is null)
+        {
+            education = application.DraftEducation
+                .Where(e => e.Include)
+                .Select(e => new CoverageEducation
+                {
+                    Institution = e.Institution,
+                    Degree = e.Degree,
+                    FieldOfStudy = e.FieldOfStudy,
+                    Description = e.Description
+                })
+                .ToList();
+        }
+
+        var coverage = await cvGenerator.AssessMustHaveCoverageAsync(new RequirementCoverageRequest
+        {
+            MustHave = application.MustHave,
+            Experiences = experiences,
+            Education = education
+        }, ct);
+
+        return Ok(new
+        {
+            Items = coverage.Items.Select(item => new
+            {
+                item.Requirement,
+                item.Coverage,
+                item.Evidence
+            })
+        });
+    }
+
     [HttpPost("{id:guid}/experiences/{experienceId:guid}")]
     public async Task<ActionResult<object>> RefineExperience(
         Guid id,
@@ -328,6 +414,7 @@ public class ApplicationsController(MongoDbContext db, ICvGenerator cvGenerator,
             fullName,
             user.GetCvEmail(),
             string.IsNullOrWhiteSpace(user.Phone) ? null : user.Phone.Trim(),
+            user.Languages,
             draft,
             experiencesForPdf,
             educationForPdf);
@@ -551,6 +638,8 @@ public class ApplicationsController(MongoDbContext db, ICvGenerator cvGenerator,
         application.Status,
         application.Notes,
         application.JobAd,
+        MustHave = application.MustHave ?? [],
+        NiceToHave = application.NiceToHave ?? [],
         application.Summary,
         application.Skills,
         Experiences = application.DraftExperiences.Select(e => new
@@ -594,3 +683,15 @@ public class ApplicationsController(MongoDbContext db, ICvGenerator cvGenerator,
             .Take(20)
             .ToList();
 }
+
+public record CoverageRequestBody(
+    List<CoverageExperienceInput>? Experiences,
+    List<CoverageEducationInput>? Education);
+
+public record CoverageExperienceInput(string? Company, string? Title, string? Description, List<string>? Skills);
+
+public record CoverageEducationInput(
+    string? Institution,
+    string? Degree,
+    string? FieldOfStudy,
+    string? Description);

@@ -17,6 +17,7 @@ public sealed class CvPdfRenderer
         string fullName,
         string email,
         string? phone,
+        IReadOnlyList<string>? languages,
         CvDraft draft,
         IReadOnlyList<CvDraftExperience> experiences,
         IReadOnlyList<CvDraftEducation> education)
@@ -54,6 +55,14 @@ public sealed class CvPdfRenderer
                         if (contactParts.Count > 0)
                         {
                             col.Item().PaddingTop(2).Text(string.Join("  ·  ", contactParts))
+                                .FontSize(9)
+                                .FontColor(Colors.Grey.Darken1);
+                        }
+
+                        var languageLine = string.Join("  ·  ", (languages ?? []).Where(language => !string.IsNullOrWhiteSpace(language)).Select(language => language.Trim()));
+                        if (languageLine.Length > 0)
+                        {
+                            col.Item().PaddingTop(2).Text(languageLine)
                                 .FontSize(9)
                                 .FontColor(Colors.Grey.Darken1);
                         }
@@ -157,7 +166,35 @@ public sealed class CvPdfRenderer
 
             if (!string.IsNullOrWhiteSpace(exp.Description))
             {
-                col.Item().PaddingTop(2).Text(exp.Description!).FontSize(9.5f);
+                col.Item().PaddingTop(2).Element(item => RenderBulletDescription(item, exp.Description!));
+            }
+        });
+    }
+
+    private static void RenderBulletDescription(IContainer container, string description)
+    {
+        var lines = description
+            .Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(line => line.TrimStart('-', '•', '*', ' ').Trim())
+            .Where(line => line.Length > 0)
+            .ToList();
+
+        if (lines.Count <= 1 && !description.Contains('\n'))
+        {
+            container.Text(description.Trim()).FontSize(9.5f);
+            return;
+        }
+
+        container.Column(col =>
+        {
+            foreach (var line in lines)
+            {
+                col.Item().PaddingBottom(1).Row(row =>
+                {
+                    row.ConstantItem(10).Text("•").FontSize(9.5f);
+                    row.RelativeItem().Text(line).FontSize(9.5f);
+                });
             }
         });
     }
