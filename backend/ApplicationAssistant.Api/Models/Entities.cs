@@ -87,6 +87,18 @@ public class JobApplication
     public string Status { get; set; } = "Draft";
     public string? Notes { get; set; }
     public string? JobAd { get; set; }
+    /// <summary>Current wizard step: ad, requirements, fit, roles, or review.</summary>
+    public string? WizardStep { get; set; }
+    /// <summary>Furthest wizard step the user can return to without repeating work.</summary>
+    public string? WizardReached { get; set; }
+    /// <summary>Notes used for the latest role scores. Null until roles have been scored.</summary>
+    public string? ScoredFitNotes { get; set; }
+    /// <summary>True after titles and descriptions have been written for the current selection.</summary>
+    public bool DescriptionsWritten { get; set; }
+    /// <summary>Role ids included the last time descriptions were written.</summary>
+    public List<Guid> TailoredExperienceIds { get; set; } = [];
+    /// <summary>Optional notes on relevant experience and why the role is a fit. Used while tailoring.</summary>
+    public string? FitNotes { get; set; }
     public List<string> MustHave { get; set; } = [];
     public List<string> NiceToHave { get; set; } = [];
     public string? Summary { get; set; }

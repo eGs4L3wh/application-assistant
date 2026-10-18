@@ -167,12 +167,21 @@ export type DraftEducation = {
 
 export type RequirementCoverage = {
   requirement: string;
+  kind?: "must" | "nice" | string;
   coverage: "covered" | "partial" | "missing" | string;
   evidence: string;
 };
 
+export type WizardStep = "ad" | "requirements" | "fit" | "roles" | "review";
+
 export type ApplicationDetail = ApplicationItem & {
   jobAd?: string | null;
+  wizardStep?: WizardStep | string | null;
+  wizardReached?: WizardStep | string | null;
+  fitNotes?: string | null;
+  scoredFitNotes?: string | null;
+  descriptionsWritten?: boolean;
+  tailoredExperienceIds?: string[];
   mustHave?: string[];
   niceToHave?: string[];
   summary?: string | null;
@@ -210,6 +219,8 @@ export type UpdateDraftPayload = {
   skills?: string[];
   experiences?: DraftExperience[];
   education?: DraftEducation[];
+  wizardStep?: WizardStep;
+  fitNotes?: string;
 };
 
 export const api = {
@@ -262,6 +273,21 @@ export const api = {
     request<ApplicationDetail>("/api/applications", {
       method: "POST",
       body: JSON.stringify({ jobAd })
+    }),
+  rereadJobAd: (id: string, jobAd: string) =>
+    request<ApplicationDetail>(`/api/applications/${id}/requirements`, {
+      method: "POST",
+      body: JSON.stringify({ jobAd })
+    }),
+  scoreRelevance: (id: string, fitNotes: string) =>
+    request<ApplicationDetail>(`/api/applications/${id}/relevance`, {
+      method: "POST",
+      body: JSON.stringify({ fitNotes })
+    }),
+  tailorApplication: (id: string, payload: { experienceIds: string[]; fitNotes?: string }) =>
+    request<ApplicationDetail>(`/api/applications/${id}/tailor`, {
+      method: "POST",
+      body: JSON.stringify(payload)
     }),
   updateApplicationDraft: (id: string, payload: UpdateDraftPayload) =>
     request<ApplicationDetail>(`/api/applications/${id}`, {

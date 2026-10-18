@@ -1,18 +1,61 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
+import { api, type ApplicationDetail, type DraftExperience, type RequirementCoverage } from "../api";
 import {
-  api,
-  ENGAGEMENT_TYPES,
-  type ApplicationDetail,
-  type DraftEducation,
-  type DraftExperience,
-  type RequirementCoverage
-} from "../api";
-import { ExperienceTimeline } from "../components/ExperienceTimeline";
-import { SkillTagsField } from "../components/SkillTagsField";
-import { fromMonthInput, toMonthInput } from "../lib/dates";
+  ApplicationWizard,
+  WIZARD_STEPS,
+  WizardStepper,
+  isOpenWizardStep,
+  wizardStepIndex,
+  type WizardBusy,
+  type WizardStepId
+} from "../components/ApplicationWizard";
+import { formatDateRange } from "../lib/dates";
 import { downloadBlob } from "../lib/download";
 import { useAuth } from "../auth/AuthContext";
+
+function RequirementColumn({
+  title,
+  mark,
+  items,
+  coverage
+}: {
+  title: string;
+  mark: string;
+  items: string[];
+  coverage: RequirementCoverage[] | null;
+}) {
+  return (
+    <div>
+      <h3 className="wizard-req-heading">{title}</h3>
+      {items.length === 0 ? (
+        <p className="muted">None inferred from this ad.</p>
+      ) : (
+        <ul className="req-list">
+          {items.map((item) => {
+            const result = coverage?.find(
+              (entry) => entry.requirement.localeCompare(item, undefined, { sensitivity: "accent" }) === 0
+            );
+            return (
+              <li key={item}>
+                <span className={`req-mark ${mark}`} aria-hidden="true" />
+                <span>
+                  <span className="coverage-heading">
+                    <span>{item}</span>
+                    {result && (
+                      <span className={`coverage-badge coverage-${result.coverage}`}>{result.coverage}</span>
+                    )}
+                  </span>
+                  {result && <p>{result.evidence}</p>}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
 
 export default function ApplicationPage() {
   const { id } = useParams<{ id: string }>();
@@ -23,14 +66,15 @@ export default function ApplicationPage() {
   const [jobAd, setJobAd] = useState("");
   const [draft, setDraft] = useState<ApplicationDetail | null>(null);
   const [loading, setLoading] = useState(() => !isNew);
-  const [previewing, setPreviewing] = useState(false);
+  const [wizardBusy, setWizardBusy] = useState<WizardBusy>(null);
+  const [fitNotes, setFitNotes] = useState("");
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [savingDraft, setSavingDraft] = useState(false);
   const [finalizing, setFinalizing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [aiEditExperienceId, setAiEditExperienceId] = useState<string | null>(null);
   const [aiEditPrompt, setAiEditPrompt] = useState("");
   const [aiEditingId, setAiEditingId] = useState<string | null>(null);
-  const [timelineEditId, setTimelineEditId] = useState<string | null>(null);
   const [credits, setCredits] = useState<number | null>(null);
   const [coverage, setCoverage] = useState<RequirementCoverage[] | null>(null);
   const [checkingCoverage, setCheckingCoverage] = useState(false);
@@ -56,12 +100,14 @@ export default function ApplicationPage() {
     if (isNew) {
       setDraft(null);
       setJobAd("");
+      setWizardBusy(null);
       setLoading(false);
       return;
     }
 
     let cancelled = false;
     setLoading(true);
+    setWizardBusy(null);
     setError(null);
 
     void (async () => {
@@ -83,6 +129,181 @@ export default function ApplicationPage() {
       cancelled = true;
     };
   }, [id, isNew]);
+
+  useEffect(() => {
+    setFitNotes(draft?.fitNotes ?? "");
+  }, [draft?.id, draft?.fitNotes]);
+
+  useEffect(() => {
+    if (!draft || draft.wizardStep !== "roles") return;
+    setSelectedIds(draft.experiences.filter((exp) => exp.include).map((exp) => exp.id));
+  }, [draft?.id, draft?.updatedAt, draft?.wizardStep]);
+
+  async function onCreatePreview() {
+    if (wizardBusy || !jobAd.trim() || credits === null || credits < 1) return;
+    setWizardBusy("create");
+    setError(null);
+    try {
+      const detail = await api.previewApplication(jobAd);
+      navigate(`/applications/${detail.id}`, { replace: true });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not read the job ad");
+      setWizardBusy(null);
+    }
+  }
+
+  function currentSelection() {
+    if (!draft) return [];
+    if (draft.wizardStep === "roles") return selectedIds;
+    return draft.experiences.filter((exp) => exp.include).map((exp) => exp.id);
+  }
+
+  function forwardLimitIndex() {
+    if (isNew || !draft) return 0;
+    let limit = wizardStepIndex(draft.wizardReached || draft.wizardStep || "requirements");
+    if (jobAd.trim() !== (draft.jobAd ?? "").trim()) return wizardStepIndex("ad");
+    if (draft.scoredFitNotes != null && fitNotes.trim() !== draft.scoredFitNotes.trim()) {
+      limit = Math.min(limit, wizardStepIndex("fit"));
+    }
+    if (
+      draft.descriptionsWritten &&
+      !sameIds(currentSelection(), draft.tailoredExperienceIds ?? [])
+    ) {
+      limit = Math.min(limit, wizardStepIndex("roles"));
+    }
+    return limit;
+  }
+
+  function isWizardStepEnabled(target: WizardStepId) {
+    if (wizardBusy) return false;
+    if (isNew) return target === "ad";
+    return wizardStepIndex(target) <= forwardLimitIndex() + 1;
+  }
+
+  async function runWizard(busy: Exclude<WizardBusy, null>, action: () => Promise<void>) {
+    if (wizardBusy) return;
+    setWizardBusy(busy);
+    setError(null);
+    try {
+      await action();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not continue");
+    } finally {
+      setWizardBusy(null);
+    }
+  }
+
+  async function saveWizardPosition(target: WizardStepId) {
+    if (!draft) return;
+    if (!draft.wizardStep || draft.wizardStep === "review") {
+      await persistDraft();
+    }
+    const saved = await api.updateApplicationDraft(draft.id, {
+      wizardStep: target,
+      fitNotes,
+      ...(draft.wizardStep === "roles"
+        ? {
+            experiences: draft.experiences.map((exp) => ({
+              ...exp,
+              include: selectedIds.includes(exp.id),
+              isCurrent: exp.isCurrent ?? false,
+              engagementType: exp.engagementType || "Permanent",
+              endDate: exp.isCurrent ? null : exp.endDate
+            }))
+          }
+        : {})
+    });
+    setDraft(saved);
+  }
+
+  async function onWizardOpen(target: WizardStepId) {
+    if (!draft || !isWizardStepEnabled(target)) return;
+    const current = wizardStepIndex(draft.wizardStep);
+    if (wizardStepIndex(target) === current) return;
+    if (wizardStepIndex(target) <= forwardLimitIndex()) {
+      await runWizard("save", () => saveWizardPosition(target));
+      return;
+    }
+    await unlockNext();
+  }
+
+  async function unlockNext() {
+    if (!draft) return;
+    const next = WIZARD_STEPS[forwardLimitIndex() + 1]?.id;
+    if (!next) return;
+    if (next === "requirements") {
+      await runWizard("create", async () => {
+        const saved = await api.rereadJobAd(draft.id, jobAd.trim());
+        setJobAd(saved.jobAd ?? jobAd.trim());
+        setDraft(saved);
+      });
+      return;
+    }
+    if (next === "fit") {
+      await runWizard("save", () => saveWizardPosition("fit"));
+      return;
+    }
+    if (next === "roles") {
+      await runWizard("score", async () => {
+        setDraft(await api.scoreRelevance(draft.id, fitNotes));
+      });
+      return;
+    }
+    await runWizard("tailor", async () => {
+      if (draft.wizardStep === "roles") {
+        await api.updateApplicationDraft(draft.id, {
+          fitNotes,
+          experiences: draft.experiences.map((exp) => ({
+            ...exp,
+            include: selectedIds.includes(exp.id),
+            isCurrent: exp.isCurrent ?? false,
+            engagementType: exp.engagementType || "Permanent",
+            endDate: exp.isCurrent ? null : exp.endDate
+          }))
+        });
+      }
+      setDraft(await api.tailorApplication(draft.id, { experienceIds: currentSelection(), fitNotes }));
+    });
+  }
+
+  async function onWizardContinue() {
+    if (isNew) {
+      await onCreatePreview();
+      return;
+    }
+    if (!draft || wizardBusy) return;
+    const current = wizardStepIndex(draft.wizardStep);
+    const limit = forwardLimitIndex();
+    if (current < limit) {
+      const next = WIZARD_STEPS[current + 1]?.id;
+      if (!next) return;
+      await runWizard("save", () => saveWizardPosition(next));
+      return;
+    }
+    await unlockNext();
+  }
+
+  async function onWizardBack() {
+    if (!draft || wizardBusy) return;
+    const current = wizardStepIndex(draft.wizardStep);
+    if (current <= 0) return;
+    const previous = WIZARD_STEPS[current - 1]?.id;
+    if (!previous) return;
+    await runWizard("save", () => saveWizardPosition(previous));
+  }
+
+  function sameIds(left: string[], right: string[]) {
+    if (left.length !== right.length) return false;
+    const ids = new Set(left);
+    return right.every((id) => ids.has(id));
+  }
+
+  function onToggleRole(id: string, included: boolean) {
+    setCoverage(null);
+    setSelectedIds((current) =>
+      included ? (current.includes(id) ? current : [...current, id]) : current.filter((item) => item !== id)
+    );
+  }
 
   async function onCheckCoverage() {
     if (!draft || checkingCoverage) return;
@@ -115,41 +336,14 @@ export default function ApplicationPage() {
     }
   }
 
-  async function onCreatePreview(event: FormEvent) {
-    event.preventDefault();
-    if (previewing || !jobAd.trim() || credits === null || credits < 1) return;
-    setPreviewing(true);
-    setError(null);
-    try {
-      const detail = await api.previewApplication(jobAd);
-      navigate(`/applications/${detail.id}`, { replace: true });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not create preview");
-      setPreviewing(false);
-    }
-  }
-
   function updateDraftExperience(experienceId: string, patch: Partial<DraftExperience>) {
-    if ("include" in patch) setCoverage(null);
+    setCoverage(null);
     setDraft((current) => {
       if (!current) return current;
       return {
         ...current,
         experiences: current.experiences.map((exp) =>
           exp.id === experienceId ? { ...exp, ...patch } : exp
-        )
-      };
-    });
-  }
-
-  function updateDraftEducation(educationId: string, patch: Partial<DraftEducation>) {
-    if ("include" in patch) setCoverage(null);
-    setDraft((current) => {
-      if (!current) return current;
-      return {
-        ...current,
-        education: current.education.map((edu) =>
-          edu.id === educationId ? { ...edu, ...patch } : edu
         )
       };
     });
@@ -266,13 +460,11 @@ export default function ApplicationPage() {
     }
   }
 
-  const timelineEditExp =
-    draft && timelineEditId
-      ? (draft.experiences.find((e) => e.id === timelineEditId) ?? null)
-      : null;
+  const pinReviewActions =
+    Boolean(draft) && !isNew && !loading && !isOpenWizardStep(draft?.wizardStep);
 
   return (
-    <div className={`app-page${draft && !isNew && !loading ? " app-page-with-actions" : ""}`}>
+    <div className={`app-page${pinReviewActions ? " app-page-with-actions" : ""}`}>
       <header className="dash-header">
         <div>
           <p className="brand">Application Assistant</p>
@@ -295,66 +487,29 @@ export default function ApplicationPage() {
 
       {loading ? (
         <p className="muted">Loading application…</p>
-      ) : isNew ? (
-        <section className="panel app-page-panel">
-          <div className="panel-header">
-            <h2>New application</h2>
-          </div>
-          <form
-            className={`form${previewing ? " form-busy" : ""}`}
-            onSubmit={(e) => void onCreatePreview(e)}
-            aria-busy={previewing}
-          >
-            <label>
-              Job ad
-              <textarea
-                value={jobAd}
-                onChange={(e) => setJobAd(e.target.value)}
-                rows={16}
-                required
-                disabled={previewing || credits === 0}
-                placeholder="Paste the full job advertisement here…"
-              />
-            </label>
-            {credits === 0 && (
-              <p className="muted">You need a credit before you can start an application.</p>
-            )}
-            {credits !== null && credits > 0 && (
-              <p className="muted">Uses 1 credit. You have {credits} left.</p>
-            )}
-            {previewing && (
-              <div className="busy-banner" role="status" aria-live="polite">
-                <span className="spinner" aria-hidden="true" />
-                <div>
-                  <strong>Reading requirements and drafting…</strong>
-                  <p className="muted">Extracting must-haves, then tailoring experience bullets.</p>
-                </div>
-              </div>
-            )}
-            <div className="form-actions">
-              <Link
-                to="/"
-                className={`btn btn-ghost${previewing ? " is-disabled" : ""}`}
-                aria-disabled={previewing}
-                onClick={(e) => {
-                  if (previewing) e.preventDefault();
-                }}
-              >
-                Cancel
-              </Link>
-              <button type="submit" className="btn btn-primary" disabled={previewing || credits === null || credits < 1}>
-                {previewing ? (
-                  <>
-                    <span className="spinner spinner-on-dark" aria-hidden="true" />
-                    Analyzing…
-                  </>
-                ) : (
-                  "Create preview"
-                )}
-              </button>
-            </div>
-          </form>
-        </section>
+      ) : isNew || (draft && isOpenWizardStep(draft.wizardStep)) ? (
+        <ApplicationWizard
+          step={isNew || !draft || !isOpenWizardStep(draft.wizardStep) ? "ad" : draft.wizardStep}
+          jobAd={jobAd}
+          onJobAdChange={setJobAd}
+          credits={credits}
+          draft={draft}
+          fitNotes={fitNotes}
+          onFitNotesChange={setFitNotes}
+          selectedIds={selectedIds}
+          onToggleRole={onToggleRole}
+          onChangeRole={(id, patch) => updateDraftExperience(id, patch)}
+          busy={wizardBusy}
+          isNew={isNew}
+          descriptionsReady={
+            Boolean(draft?.descriptionsWritten) &&
+            sameIds(selectedIds, draft?.tailoredExperienceIds ?? [])
+          }
+          isStepEnabled={isWizardStepEnabled}
+          onOpen={(target) => void onWizardOpen(target)}
+          onContinue={() => void onWizardContinue()}
+          onBack={() => void onWizardBack()}
+        />
       ) : !draft ? (
         <section className="panel app-page-panel">
           <p className="muted">Application not found.</p>
@@ -367,6 +522,12 @@ export default function ApplicationPage() {
       ) : (
         <>
           <div className="app-page-main">
+            <WizardStepper
+              current="review"
+              busy={wizardBusy !== null || savingDraft || finalizing}
+              isStepEnabled={isWizardStepEnabled}
+              onOpen={(target) => void onWizardOpen(target)}
+            />
             <header className="app-page-title">
               <div>
                 <h1>{draft.roleTitle || "Untitled role"}</h1>
@@ -377,144 +538,55 @@ export default function ApplicationPage() {
               </div>
             </header>
 
-            <section className="req-grid">
-              <article className="panel app-page-panel req-panel">
-                <div className="panel-header">
-                  <h2>Must have</h2>
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn-small"
-                    disabled={checkingCoverage || (draft.mustHave ?? []).length === 0}
-                    onClick={() => void onCheckCoverage()}
-                  >
-                    {checkingCoverage ? "Checking…" : "Check coverage"}
-                  </button>
-                </div>
-                {(draft.mustHave ?? []).length === 0 ? (
-                  <p className="muted">None inferred from this ad.</p>
-                ) : (
-                  <ul className="req-list">
-                    {(draft.mustHave ?? []).map((item) => (
-                      <li key={item}>
-                        <span className="req-mark req-mark-must" aria-hidden="true" />
-                        <span>{item}</span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-                {coverage && (
-                  <ul className="coverage-list">
-                    {coverage.map((item) => (
-                      <li key={item.requirement}>
-                        <div className="coverage-heading">
-                          <strong>{item.requirement}</strong>
-                          <span className={`coverage-badge coverage-${item.coverage}`}>
-                            {item.coverage}
-                          </span>
-                        </div>
-                        <p>{item.evidence}</p>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </article>
-              <article className="panel app-page-panel req-panel">
-                <h2>Nice to have</h2>
-                {(draft.niceToHave ?? []).length === 0 ? (
-                  <p className="muted">None inferred from this ad.</p>
-                ) : (
-                  <ul className="req-list">
-                    {(draft.niceToHave ?? []).map((item) => (
-                      <li key={item}>
-                        <span className="req-mark req-mark-nice" aria-hidden="true" />
-                        <span>{item}</span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </article>
+            <section className="panel app-page-panel">
+              <div className="panel-header">
+                <h2>Requirements</h2>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-small"
+                  disabled={
+                    checkingCoverage ||
+                    ((draft.mustHave ?? []).length === 0 && (draft.niceToHave ?? []).length === 0)
+                  }
+                  onClick={() => void onCheckCoverage()}
+                >
+                  {checkingCoverage ? "Checking…" : "Check coverage"}
+                </button>
+              </div>
+              <div className="req-grid">
+                <RequirementColumn
+                  title="Must have"
+                  mark="req-mark-must"
+                  items={draft.mustHave ?? []}
+                  coverage={coverage?.filter((item) => item.kind !== "nice") ?? null}
+                />
+                <RequirementColumn
+                  title="Nice to have"
+                  mark="req-mark-nice"
+                  items={draft.niceToHave ?? []}
+                  coverage={coverage?.filter((item) => item.kind === "nice") ?? null}
+                />
+              </div>
             </section>
 
-            {draft.jobAd && (
-              <section className="panel app-page-panel">
-                <h2>Job ad</h2>
-                <div className="job-ad">{draft.jobAd}</div>
-              </section>
-            )}
-
-            <section className="panel app-page-panel">
-              <div className="draft-editor">
-              <div className="form-row">
-                <label>
-                  Company
-                  <input
-                    value={draft.company}
-                    onChange={(e) => setDraft({ ...draft, company: e.target.value })}
-                  />
-                </label>
-                <label>
-                  Role title
-                  <input
-                    value={draft.roleTitle}
-                    onChange={(e) => setDraft({ ...draft, roleTitle: e.target.value })}
-                  />
-                </label>
-              </div>
-
-              <label>
-                Notes
-                <textarea
-                  value={draft.notes ?? ""}
-                  onChange={(e) => setDraft({ ...draft, notes: e.target.value })}
-                  rows={4}
-                  placeholder="Outcome, interview notes, follow-ups, salary, contacts…"
-                />
-              </label>
-
-              <label>
-                Summary
-                <textarea
-                  value={draft.summary ?? ""}
-                  onChange={(e) => setDraft({ ...draft, summary: e.target.value })}
-                  rows={5}
-                />
-              </label>
-
-              <SkillTagsField
-                value={draft.skills}
-                onChange={(skills) => setDraft({ ...draft, skills })}
-              />
-
-              <div className="draft-section">
-                <h3>Experience for CV</h3>
-                <p className="muted">
-                  Toggle roles, edit titles, dates, and descriptions before generating.
-                </p>
-                <ExperienceTimeline
-                  experiences={draft.experiences}
-                  onChangeExperience={(experienceId, patch) =>
-                    updateDraftExperience(experienceId, patch)
-                  }
-                  onSelectExperience={(experienceId) => {
-                    setTimelineEditId(experienceId);
-                    setError(null);
-                    closeAiEdit();
-                  }}
-                />
-                <ul className="draft-list">
-                  {draft.experiences.map((exp) => (
-                    <li key={exp.id} className={exp.include ? undefined : "draft-excluded"}>
-                      <label className="checkbox-row">
-                        <input
-                          type="checkbox"
-                          checked={exp.include}
-                          onChange={(e) =>
-                            updateDraftExperience(exp.id, { include: e.target.checked })
-                          }
-                        />
-                        Include on CV
-                        <span className="muted">· score {Math.round(exp.relevanceScore)}</span>
-                      </label>
+            <section className="panel app-page-panel form">
+              <h2>Experience</h2>
+              <p className="muted">
+                Titles and descriptions written for the roles you included. Edit them before generating the CV.
+              </p>
+              <ul className="draft-list">
+                  {draft.experiences.filter((exp) => exp.include).length === 0 ? (
+                    <li>
+                      <p className="muted">No roles included. Go back and choose at least one.</p>
+                    </li>
+                  ) : null}
+                  {draft.experiences
+                    .filter((exp) => exp.include)
+                    .map((exp) => (
+                    <li key={exp.id}>
+                      <p className="muted wizard-lead">
+                        {formatDateRange(exp.startDate, exp.endDate, exp.isCurrent)}
+                      </p>
                       <div className="form-row">
                         <label>
                           Title
@@ -535,74 +607,6 @@ export default function ApplicationPage() {
                           />
                         </label>
                       </div>
-                      <label>
-                        Location
-                        <input
-                          value={exp.location ?? ""}
-                          onChange={(e) =>
-                            updateDraftExperience(exp.id, { location: e.target.value || null })
-                          }
-                        />
-                      </label>
-                      <label>
-                        Engagement
-                        <select
-                          value={exp.engagementType || "Permanent"}
-                          onChange={(e) =>
-                            updateDraftExperience(exp.id, { engagementType: e.target.value })
-                          }
-                        >
-                          {ENGAGEMENT_TYPES.map((type) => (
-                            <option key={type} value={type}>
-                              {type}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <div className="form-row">
-                        <label>
-                          Start
-                          <input
-                            type="month"
-                            value={toMonthInput(exp.startDate)}
-                            onChange={(e) =>
-                              updateDraftExperience(exp.id, {
-                                startDate: fromMonthInput(e.target.value)
-                              })
-                            }
-                          />
-                        </label>
-                        <label>
-                          End
-                          <input
-                            type="month"
-                            value={toMonthInput(exp.endDate)}
-                            onChange={(e) =>
-                              updateDraftExperience(exp.id, {
-                                endDate: fromMonthInput(e.target.value)
-                              })
-                            }
-                            disabled={exp.isCurrent}
-                          />
-                        </label>
-                      </div>
-                      <label className="checkbox-row">
-                        <input
-                          type="checkbox"
-                          checked={exp.isCurrent ?? false}
-                          onChange={(e) =>
-                            updateDraftExperience(exp.id, {
-                              isCurrent: e.target.checked,
-                              endDate: e.target.checked ? null : exp.endDate
-                            })
-                          }
-                        />
-                        Current role
-                      </label>
-                      <SkillTagsField
-                        value={exp.skills ?? []}
-                        onChange={(skills) => updateDraftExperience(exp.id, { skills })}
-                      />
                       <div className="field-with-action">
                         <div className="list-row">
                           <span className="field-label">Description</span>
@@ -654,96 +658,34 @@ export default function ApplicationPage() {
                     </li>
                   ))}
                 </ul>
-              </div>
-
-              {draft.education.length > 0 && (
-                <div className="draft-section">
-                  <h3>Education for CV</h3>
-                  <ul className="draft-list">
-                    {draft.education.map((edu) => (
-                      <li key={edu.id} className={edu.include ? undefined : "draft-excluded"}>
-                        <label className="checkbox-row">
-                          <input
-                            type="checkbox"
-                            checked={edu.include}
-                            onChange={(e) =>
-                              updateDraftEducation(edu.id, { include: e.target.checked })
-                            }
-                          />
-                          Include on CV
-                        </label>
-                        <div className="form-row">
-                          <label>
-                            Institution
-                            <input
-                              value={edu.institution}
-                              onChange={(e) =>
-                                updateDraftEducation(edu.id, { institution: e.target.value })
-                              }
-                            />
-                          </label>
-                          <label>
-                            Degree
-                            <input
-                              value={edu.degree ?? ""}
-                              onChange={(e) =>
-                                updateDraftEducation(edu.id, {
-                                  degree: e.target.value || null
-                                })
-                              }
-                            />
-                          </label>
-                        </div>
-                        <div className="form-row">
-                          <label>
-                            Start
-                            <input
-                              type="month"
-                              value={toMonthInput(edu.startDate)}
-                              onChange={(e) =>
-                                updateDraftEducation(edu.id, {
-                                  startDate: fromMonthInput(e.target.value)
-                                })
-                              }
-                            />
-                          </label>
-                          <label>
-                            End
-                            <input
-                              type="month"
-                              value={toMonthInput(edu.endDate)}
-                              onChange={(e) =>
-                                updateDraftEducation(edu.id, {
-                                  endDate: fromMonthInput(e.target.value)
-                                })
-                              }
-                            />
-                          </label>
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </div>
-          </section>
+            </section>
           </div>
 
           <div className="app-page-actions">
-            <button
-              type="button"
-              className="btn btn-ghost"
-              disabled={savingDraft || finalizing}
-              onClick={() => void onDelete()}
-            >
-              Delete
-            </button>
+            <div className="app-page-actions-start">
+              <button
+                type="button"
+                className="btn btn-ghost"
+                disabled={savingDraft || finalizing || wizardBusy !== null}
+                onClick={() => void onWizardBack()}
+              >
+                Back
+              </button>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                disabled={savingDraft || finalizing || wizardBusy !== null}
+                onClick={() => void onDelete()}
+              >
+                Delete
+              </button>
+            </div>
             <div className="app-page-actions-main">
               {draft.hasGeneratedCv && (
                 <button
                   type="button"
                   className="btn btn-ghost"
-                  disabled={savingDraft || finalizing}
+                  disabled={savingDraft || finalizing || wizardBusy !== null}
                   onClick={() => void onDownloadCv()}
                 >
                   Download saved CV
@@ -752,7 +694,7 @@ export default function ApplicationPage() {
               <button
                 type="button"
                 className="btn btn-ghost"
-                disabled={savingDraft || finalizing}
+                disabled={savingDraft || finalizing || wizardBusy !== null}
                 onClick={() => void onSave()}
               >
                 {savingDraft && !finalizing ? "Saving…" : "Save"}
@@ -760,7 +702,7 @@ export default function ApplicationPage() {
               <button
                 type="button"
                 className="btn btn-primary"
-                disabled={savingDraft || finalizing}
+                disabled={savingDraft || finalizing || wizardBusy !== null}
                 onClick={() => void onSaveAndGenerate()}
               >
                 {finalizing
@@ -774,114 +716,6 @@ export default function ApplicationPage() {
         </>
       )}
 
-      {timelineEditExp && (
-          <div
-            className="modal-backdrop"
-            role="presentation"
-            onClick={() => {
-              setTimelineEditId(null);
-              closeAiEdit();
-            }}
-          >
-            <div
-              className="modal modal-compact modal-description"
-              role="dialog"
-              aria-modal="true"
-              aria-labelledby="timeline-edit-title"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="modal-header">
-                <div>
-                  <h2 id="timeline-edit-title">{timelineEditExp.title || "Untitled role"}</h2>
-                  <p className="muted modal-subtitle">
-                    {timelineEditExp.company || "Unknown company"}
-                    {timelineEditExp.include ? "" : " · excluded from CV"}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-small"
-                  onClick={() => {
-                    setTimelineEditId(null);
-                    closeAiEdit();
-                  }}
-                >
-                  Close
-                </button>
-              </div>
-
-              <div className="modal-body form">
-                <div className="field-with-action">
-                  <div className="list-row">
-                    <span className="field-label">Description</span>
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-small"
-                      onClick={() =>
-                        aiEditExperienceId === timelineEditExp.id
-                          ? closeAiEdit()
-                          : openAiEdit(timelineEditExp.id)
-                      }
-                    >
-                      {aiEditExperienceId === timelineEditExp.id ? "Cancel" : "AI edit"}
-                    </button>
-                  </div>
-                  <textarea
-                    value={timelineEditExp.description ?? ""}
-                    onChange={(e) =>
-                      updateDraftExperience(timelineEditExp.id, {
-                        description: e.target.value || null
-                      })
-                    }
-                    rows={12}
-                    placeholder={"- Built and managed a team of 5 engineers\n- Implemented payment backend integration using Kafka and event sourcing"}
-                  />
-                  {aiEditExperienceId === timelineEditExp.id && (
-                    <div className="ai-edit-row">
-                      <input
-                        value={aiEditPrompt}
-                        onChange={(e) => setAiEditPrompt(e.target.value)}
-                        placeholder="e.g. emphasise leadership and cloud delivery"
-                        disabled={aiEditingId === timelineEditExp.id}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") {
-                            e.preventDefault();
-                            void onAiEditExperience(timelineEditExp.id);
-                          }
-                        }}
-                      />
-                      <button
-                        type="button"
-                        className="btn btn-primary btn-small"
-                        disabled={
-                          aiEditingId === timelineEditExp.id || !aiEditPrompt.trim()
-                        }
-                        onClick={() => void onAiEditExperience(timelineEditExp.id)}
-                      >
-                        {aiEditingId === timelineEditExp.id ? "Editing…" : "Apply"}
-                      </button>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              <div className="modal-footer">
-                <div className="form-actions">
-                  <button
-                    type="button"
-                    className="btn btn-primary"
-                    onClick={() => {
-                      setTimelineEditId(null);
-                      closeAiEdit();
-                    }}
-                  >
-                    Done
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-      )}
     </div>
   );
 }

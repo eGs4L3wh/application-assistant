@@ -44,19 +44,10 @@ public class ApplicationsController(MongoDbContext db, ICvGenerator cvGenerator,
             });
         }
 
-        CvDraft draft;
+        JobAdMetadata metadata;
         try
         {
-            var fullName = string.IsNullOrWhiteSpace(charged.DisplayName) ? charged.Email : charged.DisplayName;
-            draft = await cvGenerator.GenerateAsync(new CvGenerationRequest
-            {
-                JobAd = request.JobAd.Trim(),
-                FullName = fullName,
-                Email = charged.GetCvEmail(),
-                Phone = string.IsNullOrWhiteSpace(charged.Phone) ? null : charged.Phone.Trim(),
-                Experiences = charged.Experience.Select(ToSourceExperience).ToList(),
-                Education = charged.Education.Select(ToSourceEducation).ToList()
-            }, ct);
+            metadata = await cvGenerator.ExtractJobMetadataAsync(request.JobAd.Trim(), ct);
         }
         catch
         {
@@ -68,8 +59,8 @@ public class ApplicationsController(MongoDbContext db, ICvGenerator cvGenerator,
         }
 
         var now = DateTimeOffset.UtcNow;
-        var company = string.IsNullOrWhiteSpace(draft.TargetCompany) ? "Unknown company" : draft.TargetCompany.Trim();
-        var roleTitle = string.IsNullOrWhiteSpace(draft.TargetRoleTitle) ? "Unknown role" : draft.TargetRoleTitle.Trim();
+        var company = string.IsNullOrWhiteSpace(metadata.Company) ? "Unknown company" : metadata.Company.Trim();
+        var roleTitle = string.IsNullOrWhiteSpace(metadata.RoleTitle) ? "Unknown role" : metadata.RoleTitle.Trim();
 
         var application = new JobApplication
         {
@@ -78,12 +69,14 @@ public class ApplicationsController(MongoDbContext db, ICvGenerator cvGenerator,
             Company = company,
             RoleTitle = roleTitle,
             JobAd = request.JobAd.Trim(),
-            MustHave = draft.MustHave ?? [],
-            NiceToHave = draft.NiceToHave ?? [],
-            Summary = draft.Summary,
-            Skills = draft.Skills,
-            DraftExperiences = draft.Experiences.Select(ToStoredExperience).ToList(),
-            DraftEducation = draft.Education.Select(ToStoredEducation).ToList(),
+            MustHave = metadata.MustHave ?? [],
+            NiceToHave = metadata.NiceToHave ?? [],
+            Summary = null,
+            Skills = [],
+            DraftExperiences = charged.Experience.Select(ToSeedExperience).ToList(),
+            DraftEducation = charged.Education.Select(ToSeedEducation).ToList(),
+            WizardStep = "requirements",
+            WizardReached = "requirements",
             Status = "Draft",
             CreatedAt = now,
             UpdatedAt = now
@@ -91,6 +84,185 @@ public class ApplicationsController(MongoDbContext db, ICvGenerator cvGenerator,
 
         await db.Applications.InsertOneAsync(application, cancellationToken: ct);
         return CreatedAtAction(nameof(Get), new { id = application.Id }, ToDetailDto(application));
+    }
+
+    [HttpPost("{id:guid}/requirements")]
+    public async Task<ActionResult<object>> RereadJobAd(
+        Guid id,
+        [FromBody] RereadJobAdRequest? request,
+        CancellationToken ct)
+    {
+        var userId = User.GetAppUserId();
+        if (userId is null) return Unauthorized();
+
+        if (string.IsNullOrWhiteSpace(request?.JobAd))
+        {
+            return BadRequest(new { error = "Job ad is required." });
+        }
+
+        var application = await db.Applications
+            .Find(a => a.Id == id && a.UserId == userId)
+            .FirstOrDefaultAsync(ct);
+        if (application is null) return NotFound();
+
+        var user = await db.Users.Find(u => u.Id == userId).FirstOrDefaultAsync(ct);
+        if (user is null) return Unauthorized();
+
+        var metadata = await cvGenerator.ExtractJobMetadataAsync(request.JobAd.Trim(), ct);
+        application.JobAd = request.JobAd.Trim();
+        application.Company = string.IsNullOrWhiteSpace(metadata.Company) ? "Unknown company" : metadata.Company.Trim();
+        application.RoleTitle = string.IsNullOrWhiteSpace(metadata.RoleTitle) ? "Unknown role" : metadata.RoleTitle.Trim();
+        application.MustHave = metadata.MustHave ?? [];
+        application.NiceToHave = metadata.NiceToHave ?? [];
+        application.Summary = null;
+        application.Skills = [];
+        application.ScoredFitNotes = null;
+        application.DescriptionsWritten = false;
+        application.TailoredExperienceIds = [];
+        application.WizardStep = "requirements";
+        application.WizardReached = "requirements";
+        RestoreDraftExperiences(application, user);
+        foreach (var experience in application.DraftExperiences)
+        {
+            experience.Include = false;
+            experience.RelevanceScore = 0;
+        }
+
+        application.UpdatedAt = DateTimeOffset.UtcNow;
+        await db.Applications.ReplaceOneAsync(a => a.Id == application.Id, application, cancellationToken: ct);
+        return Ok(ToDetailDto(application));
+    }
+
+    [HttpPost("{id:guid}/relevance")]
+    public async Task<ActionResult<object>> ScoreRelevance(
+        Guid id,
+        [FromBody] ScoreRelevanceRequest? request,
+        CancellationToken ct)
+    {
+        var userId = User.GetAppUserId();
+        if (userId is null) return Unauthorized();
+
+        var application = await db.Applications
+            .Find(a => a.Id == id && a.UserId == userId)
+            .FirstOrDefaultAsync(ct);
+        if (application is null) return NotFound();
+        await MigrateLegacyWizardAsync(application, ct);
+
+        var user = await db.Users.Find(u => u.Id == userId).FirstOrDefaultAsync(ct);
+        if (user is null) return Unauthorized();
+
+        if (request?.FitNotes is not null)
+        {
+            application.FitNotes = NormalizeFitNotes(request.FitNotes);
+        }
+
+        RestoreDraftExperiences(application, user);
+        var sources = ResolveSources(application, user);
+        var scores = await cvGenerator.ScoreRelevanceAsync(new RelevanceScoreRequest
+        {
+            JobAd = application.JobAd ?? string.Empty,
+            FitNotes = application.FitNotes,
+            TargetCompany = application.Company,
+            TargetRoleTitle = application.RoleTitle,
+            MustHave = application.MustHave ?? [],
+            NiceToHave = application.NiceToHave ?? [],
+            Experiences = sources
+        }, ct);
+
+        var scoreById = scores.Experiences.ToDictionary(score => score.Id, score => score.RelevanceScore);
+        foreach (var experience in application.DraftExperiences)
+        {
+            var score = scoreById.TryGetValue(experience.Id, out var value) ? value : 40;
+            experience.RelevanceScore = Math.Clamp(score, 0, 100);
+            experience.Include = experience.RelevanceScore >= CvRelevance.IncludeCutoff;
+        }
+
+        application.WizardStep = "roles";
+        application.WizardReached = "roles";
+        application.ScoredFitNotes = application.FitNotes ?? "";
+        application.DescriptionsWritten = false;
+        application.TailoredExperienceIds = [];
+        application.Summary = null;
+        application.Skills = [];
+        application.UpdatedAt = DateTimeOffset.UtcNow;
+        await db.Applications.ReplaceOneAsync(a => a.Id == application.Id, application, cancellationToken: ct);
+        return Ok(ToDetailDto(application));
+    }
+
+    [HttpPost("{id:guid}/tailor")]
+    public async Task<ActionResult<object>> Tailor(
+        Guid id,
+        [FromBody] TailorApplicationRequest? request,
+        CancellationToken ct)
+    {
+        var userId = User.GetAppUserId();
+        if (userId is null) return Unauthorized();
+
+        var application = await db.Applications
+            .Find(a => a.Id == id && a.UserId == userId)
+            .FirstOrDefaultAsync(ct);
+        if (application is null) return NotFound();
+        await MigrateLegacyWizardAsync(application, ct);
+
+        if (request?.ExperienceIds is null)
+        {
+            return BadRequest(new { error = "Choose which roles to include." });
+        }
+
+        var user = await db.Users.Find(u => u.Id == userId).FirstOrDefaultAsync(ct);
+        if (user is null) return Unauthorized();
+
+        if (request.FitNotes is not null)
+        {
+            application.FitNotes = NormalizeFitNotes(request.FitNotes);
+        }
+
+        var selected = request.ExperienceIds
+            .Where(experienceId => application.DraftExperiences.Any(experience => experience.Id == experienceId))
+            .Distinct()
+            .ToList();
+        var sources = ResolveSources(application, user);
+        var fullName = string.IsNullOrWhiteSpace(user.DisplayName) ? user.Email : user.DisplayName;
+        var draft = await cvGenerator.TailorAsync(new TailorRequest
+        {
+            JobAd = application.JobAd ?? string.Empty,
+            TargetCompany = application.Company,
+            TargetRoleTitle = application.RoleTitle,
+            FitNotes = application.FitNotes,
+            MustHave = application.MustHave ?? [],
+            NiceToHave = application.NiceToHave ?? [],
+            FullName = fullName,
+            Email = user.GetCvEmail(),
+            Phone = string.IsNullOrWhiteSpace(user.Phone) ? null : user.Phone.Trim(),
+            Experiences = sources,
+            SelectedExperienceIds = selected,
+            Education = application.DraftEducation.Select(ToSourceEducationFromDraft).ToList()
+        }, ct);
+
+        var tailoredById = draft.Experiences.ToDictionary(experience => experience.Id);
+        foreach (var experience in application.DraftExperiences)
+        {
+            if (!tailoredById.TryGetValue(experience.Id, out var tailored))
+            {
+                experience.Include = false;
+                continue;
+            }
+
+            experience.Include = tailored.Include;
+            experience.Title = string.IsNullOrWhiteSpace(tailored.Title) ? experience.Title : tailored.Title;
+            experience.Description = tailored.Description;
+            experience.Skills = NormalizeSkills(tailored.Skills);
+        }
+
+        application.Summary = draft.Summary;
+        application.Skills = draft.Skills ?? [];
+        application.WizardStep = "review";
+        application.WizardReached = "review";
+        application.DescriptionsWritten = true;
+        application.TailoredExperienceIds = selected;
+        application.UpdatedAt = DateTimeOffset.UtcNow;
+        await db.Applications.ReplaceOneAsync(a => a.Id == application.Id, application, cancellationToken: ct);
+        return Ok(ToDetailDto(application));
     }
 
     [HttpGet("{id:guid}")]
@@ -104,6 +276,7 @@ public class ApplicationsController(MongoDbContext db, ICvGenerator cvGenerator,
             .FirstOrDefaultAsync(ct);
 
         if (application is null) return NotFound();
+        await MigrateLegacyWizardAsync(application, ct);
 
         var user = await db.Users.Find(u => u.Id == userId).FirstOrDefaultAsync(ct);
         if (user is not null)
@@ -125,6 +298,7 @@ public class ApplicationsController(MongoDbContext db, ICvGenerator cvGenerator,
             .FirstOrDefaultAsync(ct);
 
         if (application is null) return NotFound();
+        await MigrateLegacyWizardAsync(application, ct);
 
         if (request.Company is not null)
         {
@@ -142,6 +316,26 @@ public class ApplicationsController(MongoDbContext db, ICvGenerator cvGenerator,
 
         if (request.Status is not null) application.Status = request.Status.Trim();
         if (request.Notes is not null) application.Notes = request.Notes.Trim();
+        if (request.FitNotes is not null) application.FitNotes = NormalizeFitNotes(request.FitNotes);
+        if (request.WizardStep is not null)
+        {
+            if (!TryNormalizeWizardStep(request.WizardStep, out var step))
+            {
+                return BadRequest(new { error = "Unsupported wizard step." });
+            }
+
+            if (!CanVisit(application, step))
+            {
+                return BadRequest(new { error = "That step is not available yet." });
+            }
+
+            var reached = EffectiveReached(application);
+            application.WizardStep = step;
+            if (WizardIndex(step) > WizardIndex(reached))
+            {
+                application.WizardReached = step;
+            }
+        }
         if (request.CvId is not null)
         {
             if (request.CvId == Guid.Empty)
@@ -247,9 +441,9 @@ public class ApplicationsController(MongoDbContext db, ICvGenerator cvGenerator,
             .FirstOrDefaultAsync(ct);
         if (application is null) return NotFound();
 
-        if (application.MustHave is not { Count: > 0 })
+        if (application.MustHave is not { Count: > 0 } && application.NiceToHave is not { Count: > 0 })
         {
-            return BadRequest(new { error = "This application has no must-have requirements to check." });
+            return BadRequest(new { error = "This application has no requirements to check." });
         }
 
         var experiences = request?.Experiences?
@@ -301,7 +495,8 @@ public class ApplicationsController(MongoDbContext db, ICvGenerator cvGenerator,
 
         var coverage = await cvGenerator.AssessMustHaveCoverageAsync(new RequirementCoverageRequest
         {
-            MustHave = application.MustHave,
+            MustHave = application.MustHave ?? [],
+            NiceToHave = application.NiceToHave ?? [],
             Experiences = experiences,
             Education = education
         }, ct);
@@ -311,6 +506,7 @@ public class ApplicationsController(MongoDbContext db, ICvGenerator cvGenerator,
             Items = coverage.Items.Select(item => new
             {
                 item.Requirement,
+                item.Kind,
                 item.Coverage,
                 item.Evidence
             })
@@ -543,6 +739,178 @@ public class ApplicationsController(MongoDbContext db, ICvGenerator cvGenerator,
         }
     }
 
+    private static readonly string[] WizardStepOrder = ["ad", "requirements", "fit", "roles", "review"];
+
+    private async Task MigrateLegacyWizardAsync(JobApplication application, CancellationToken ct)
+    {
+        var changed = false;
+        var backfillSelection = false;
+        if (string.IsNullOrWhiteSpace(application.WizardStep) && string.IsNullOrWhiteSpace(application.WizardReached))
+        {
+            application.WizardStep = "review";
+            application.WizardReached = "review";
+            application.DescriptionsWritten = true;
+            backfillSelection = true;
+            changed = true;
+        }
+
+        if (string.IsNullOrWhiteSpace(application.WizardReached))
+        {
+            application.WizardReached = EffectiveReached(application);
+            changed = true;
+        }
+
+        var reachedReview = string.Equals(application.WizardStep, "review", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(application.WizardReached, "review", StringComparison.OrdinalIgnoreCase);
+        if (!application.DescriptionsWritten && reachedReview)
+        {
+            application.DescriptionsWritten = true;
+            backfillSelection = true;
+            changed = true;
+        }
+
+        var scored = application.ScoredFitNotes is not null
+            || application.DraftExperiences.Any(experience => experience.RelevanceScore > 0)
+            || application.WizardStep is "roles" or "review"
+            || application.WizardReached is "roles" or "review";
+        if (application.ScoredFitNotes is null && scored)
+        {
+            application.ScoredFitNotes = application.FitNotes ?? "";
+            changed = true;
+        }
+
+        if (backfillSelection && application.TailoredExperienceIds is not { Count: > 0 })
+        {
+            application.TailoredExperienceIds = application.DraftExperiences
+                .Where(experience => experience.Include)
+                .Select(experience => experience.Id)
+                .ToList();
+            changed = true;
+        }
+
+        if (!changed) return;
+
+        application.UpdatedAt = DateTimeOffset.UtcNow;
+        await db.Applications.ReplaceOneAsync(a => a.Id == application.Id, application, cancellationToken: ct);
+    }
+
+    private static bool TryNormalizeWizardStep(string? value, out string step)
+    {
+        step = value?.Trim().ToLowerInvariant() ?? "";
+        return WizardStepOrder.Contains(step);
+    }
+
+    private static int WizardIndex(string step) => Array.IndexOf(WizardStepOrder, step);
+
+    private static string EffectiveReached(JobApplication application)
+    {
+        if (TryNormalizeWizardStep(application.WizardReached, out var reached)) return reached;
+        if (TryNormalizeWizardStep(application.WizardStep, out var current)) return current;
+        return "review";
+    }
+
+    private static bool CanVisit(JobApplication application, string step) => step switch
+    {
+        "ad" or "requirements" or "fit" => true,
+        "roles" => application.ScoredFitNotes is not null
+            || application.DraftExperiences.Any(experience => experience.RelevanceScore > 0),
+        "review" => application.DescriptionsWritten,
+        _ => false
+    };
+
+    private static void RestoreDraftExperiences(JobApplication application, AppUser user)
+    {
+        var profileById = user.Experience.ToDictionary(experience => experience.Id);
+        foreach (var draft in application.DraftExperiences)
+        {
+            if (!profileById.TryGetValue(draft.Id, out var source))
+            {
+                continue;
+            }
+
+            draft.Company = source.Company;
+            draft.Title = source.Title;
+            draft.Location = source.Location;
+            draft.StartDate = source.StartDate;
+            draft.EndDate = source.EndDate;
+            draft.IsCurrent = source.IsCurrent;
+            draft.EngagementType = EngagementType.Normalize(source.EngagementType);
+            draft.Description = source.Description;
+            draft.Skills = NormalizeSkills(source.Skills);
+        }
+    }
+
+    private static string NormalizeFitNotes(string value)
+    {
+        var trimmed = value.Trim();
+        return trimmed.Length <= 4000 ? trimmed : trimmed[..4000];
+    }
+
+    private static ApplicationDraftExperience ToSeedExperience(WorkExperience experience) => new()
+    {
+        Id = experience.Id,
+        Include = false,
+        RelevanceScore = 0,
+        Company = experience.Company,
+        Title = experience.Title,
+        Location = experience.Location,
+        StartDate = experience.StartDate,
+        EndDate = experience.EndDate,
+        IsCurrent = experience.IsCurrent,
+        EngagementType = EngagementType.Normalize(experience.EngagementType),
+        Description = experience.Description,
+        Skills = NormalizeSkills(experience.Skills)
+    };
+
+    private static ApplicationDraftEducation ToSeedEducation(EducationRecord education) => new()
+    {
+        Id = education.Id,
+        Include = true,
+        Institution = education.Institution,
+        Degree = education.Degree,
+        FieldOfStudy = education.FieldOfStudy,
+        StartDate = education.StartDate,
+        EndDate = education.EndDate,
+        Description = education.Description
+    };
+
+    private static List<CvSourceExperience> ResolveSources(JobApplication application, AppUser user)
+    {
+        var profileById = user.Experience.ToDictionary(experience => experience.Id);
+        return application.DraftExperiences.Select(draft =>
+        {
+            if (profileById.TryGetValue(draft.Id, out var source))
+            {
+                return ToSourceExperience(source);
+            }
+
+            return new CvSourceExperience
+            {
+                Id = draft.Id,
+                Company = draft.Company,
+                Title = draft.Title,
+                Location = draft.Location,
+                StartDate = draft.StartDate,
+                EndDate = draft.EndDate,
+                IsCurrent = draft.IsCurrent,
+                EngagementType = EngagementType.Normalize(draft.EngagementType),
+                Description = draft.Description,
+                Skills = draft.Skills ?? []
+            };
+        }).ToList();
+    }
+
+    private static CvSourceEducation ToSourceEducationFromDraft(ApplicationDraftEducation education) => new()
+    {
+        Id = education.Id,
+        Institution = education.Institution,
+        Degree = education.Degree,
+        FieldOfStudy = education.FieldOfStudy,
+        StartDate = education.StartDate,
+        EndDate = education.EndDate,
+        Description = education.Description
+    };
+
     private static CvSourceExperience ToSourceExperience(WorkExperience e) => new()
     {
         Id = e.Id,
@@ -638,6 +1006,12 @@ public class ApplicationsController(MongoDbContext db, ICvGenerator cvGenerator,
         application.Status,
         application.Notes,
         application.JobAd,
+        WizardStep = string.IsNullOrWhiteSpace(application.WizardStep) ? "review" : application.WizardStep,
+        WizardReached = EffectiveReached(application),
+        application.FitNotes,
+        application.ScoredFitNotes,
+        application.DescriptionsWritten,
+        TailoredExperienceIds = application.TailoredExperienceIds ?? [],
         MustHave = application.MustHave ?? [],
         NiceToHave = application.NiceToHave ?? [],
         application.Summary,
@@ -683,6 +1057,12 @@ public class ApplicationsController(MongoDbContext db, ICvGenerator cvGenerator,
             .Take(20)
             .ToList();
 }
+
+public record RereadJobAdRequest(string? JobAd);
+
+public record ScoreRelevanceRequest(string? FitNotes);
+
+public record TailorApplicationRequest(List<Guid>? ExperienceIds, string? FitNotes);
 
 public record CoverageRequestBody(
     List<CoverageExperienceInput>? Experiences,

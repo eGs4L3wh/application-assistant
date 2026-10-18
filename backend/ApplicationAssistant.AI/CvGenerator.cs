@@ -64,12 +64,315 @@ public sealed class CvGenerator(ILLMService llm) : ICvGenerator
         return metadata;
     }
 
+    private const string RelevanceSystemPrompt = """
+        Score how relevant each source role is to the target job. Never invent facts.
+        Return one item per source role, copying each id exactly.
+        relevanceScore is an integer from 0 to 100:
+        80-100: the role clearly demonstrates must-have requirements.
+        70-79: the role supports several requirements, or is recent and closely related.
+        40-69: some overlap, but not a strong match.
+        0-39: little or no overlap.
+        Candidate notes are hints only. Raise a score only when the source record supports the claim.
+        Do not rewrite titles or descriptions.
+        Return JSON matching the sample shape exactly.
+        """;
+
+    public async Task<RelevanceScoreResult> ScoreRelevanceAsync(
+        RelevanceScoreRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        _ = cancellationToken;
+
+        if (request.Experiences.Count == 0)
+        {
+            return new RelevanceScoreResult();
+        }
+
+        var sample = new RelevanceScoreResult
+        {
+            Experiences = request.Experiences.Select(experience => new ExperienceRelevanceScore
+            {
+                Id = experience.Id,
+                RelevanceScore = CvRelevance.IncludeCutoff
+            }).ToList()
+        };
+        var history = new[]
+        {
+            new InputItem
+            {
+                FromUser = true,
+                Text = BuildRelevancePayload(request)
+            }
+        };
+
+        var result = await llm.GetResponseAsync(sample, RelevanceSystemPrompt, history, temperature: 0.1m, maxTokens: 4096, thinkingBudget: 0);
+        result.Experiences = AlignScores(request.Experiences, result.Experiences);
+        return result;
+    }
+
+    private const string TailorSystemPrompt = """
+        Tailor the selected CV roles to the target job using ONLY the source experience. Never invent facts.
+        Preserve every experience Id exactly. Keep real employer names. Amend titles only when the source truthfully supports the ad's wording.
+        Drop generic filler, soft-skill padding, and job-description language. Focus on concrete achievements, ownership, scale, technical decisions, and measurable outcomes that match the must-have and nice-to-have requirements.
+        When the candidate notes are supported by the source, emphasise those points.
+        For each role, write Description as bullet points: one achievement or significant aspect per bullet, each on its own line starting with "- ".
+        Put the strongest requirement matches first. Use present tense for current roles, past tense for past roles. No first person. No superlatives.
+        skills on each role, and the top-level skills list, should be short tags evidenced in the source, preferring requirement matches. Top-level skills is the CV skill list, at most 12 tags.
+        Return JSON matching the sample shape exactly.
+        """;
+
+    public async Task<CvDraft> TailorAsync(TailorRequest request, CancellationToken cancellationToken = default)
+    {
+        var selectedIds = request.SelectedExperienceIds.ToHashSet();
+        var selected = request.Experiences.Where(experience => selectedIds.Contains(experience.Id)).ToList();
+        var tailoredById = new Dictionary<Guid, TailoredRole>();
+        var skills = new List<string>();
+
+        if (selected.Count > 0)
+        {
+            var sample = new TailoredRolesDraft
+            {
+                Skills = ["C#", "APIs"],
+                Experiences = selected.Select(experience => new TailoredRole
+                {
+                    Id = experience.Id,
+                    Title = string.IsNullOrWhiteSpace(experience.Title) ? "Software Engineer" : experience.Title,
+                    Description = """
+                        - Built and managed a team of 5 engineers
+                        - Implemented payment backend integration using Kafka and event sourcing
+                        """,
+                    Skills = experience.Skills is { Count: > 0 } ? experience.Skills.Take(3).ToList() : ["C#"]
+                }).ToList()
+            };
+            var history = new[]
+            {
+                new InputItem
+                {
+                    FromUser = true,
+                    Text = BuildTailorPayload(request, selected)
+                }
+            };
+
+            var tailored = await llm.GetResponseAsync(sample, TailorSystemPrompt, history, temperature: 0.35m, maxTokens: 16384);
+            skills = (tailored.Skills ?? [])
+                .Where(skill => !string.IsNullOrWhiteSpace(skill) && !IsPlaceholderSkill(skill))
+                .Select(skill => skill.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Take(12)
+                .ToList();
+
+            foreach (var role in tailored.Experiences ?? [])
+            {
+                if (role.Id != Guid.Empty && selectedIds.Contains(role.Id))
+                {
+                    tailoredById[role.Id] = role;
+                }
+            }
+        }
+
+        var company = string.IsNullOrWhiteSpace(request.TargetCompany) ? null : request.TargetCompany.Trim();
+        var roleTitle = string.IsNullOrWhiteSpace(request.TargetRoleTitle) ? null : request.TargetRoleTitle.Trim();
+        var draft = new CvDraft
+        {
+            TargetCompany = company,
+            TargetRoleTitle = roleTitle,
+            MustHave = request.MustHave.ToList(),
+            NiceToHave = request.NiceToHave.ToList(),
+            Skills = skills,
+            Experiences = request.Experiences.Select(source => MergeTailoredExperience(source, selectedIds, tailoredById)).ToList(),
+            Education = request.Education.Select(source => new CvDraftEducation
+            {
+                Id = source.Id,
+                Include = true,
+                Institution = source.Institution,
+                Degree = source.Degree,
+                FieldOfStudy = source.FieldOfStudy,
+                StartDate = source.StartDate,
+                EndDate = source.EndDate,
+                Description = source.Description
+            }).ToList()
+        };
+
+        var summaryRequest = new CvGenerationRequest
+        {
+            JobAd = request.JobAd,
+            FullName = request.FullName,
+            Email = request.Email,
+            Phone = request.Phone,
+            Experiences = request.Experiences,
+            Education = request.Education
+        };
+        draft.Summary = await WriteSummaryAsync(
+            summaryRequest,
+            draft,
+            company,
+            roleTitle,
+            request.MustHave,
+            request.NiceToHave,
+            cancellationToken,
+            request.FitNotes);
+        return draft;
+    }
+
+    private static CvDraftExperience MergeTailoredExperience(
+        CvSourceExperience source,
+        HashSet<Guid> selectedIds,
+        IReadOnlyDictionary<Guid, TailoredRole> tailoredById)
+    {
+        var include = selectedIds.Contains(source.Id);
+        tailoredById.TryGetValue(source.Id, out var tailored);
+        var title = source.Title;
+        if (include && tailored is not null && !string.IsNullOrWhiteSpace(tailored.Title) && !IsPlaceholderTitle(tailored.Title))
+        {
+            title = tailored.Title.Trim();
+        }
+
+        string? description = source.Description;
+        if (include)
+        {
+            description = NormalizeBulletDescription(
+                tailored is null || string.IsNullOrWhiteSpace(tailored.Description)
+                    ? source.Description
+                    : tailored.Description);
+            if (string.IsNullOrWhiteSpace(description))
+            {
+                description = "- Contributed to team delivery and project outcomes.";
+            }
+        }
+
+        return new CvDraftExperience
+        {
+            Id = source.Id,
+            Include = include,
+            Company = source.Company,
+            Title = title,
+            Location = source.Location,
+            StartDate = source.StartDate,
+            EndDate = source.EndDate,
+            IsCurrent = source.IsCurrent,
+            EngagementType = string.IsNullOrWhiteSpace(source.EngagementType) ? "Permanent" : source.EngagementType,
+            Description = description,
+            Skills = include ? PreferSkills(tailored?.Skills, source.Skills) : NormalizeSkills(source.Skills)
+        };
+    }
+
+    private static string BuildRelevancePayload(RelevanceScoreRequest request)
+    {
+        var sb = new StringBuilder();
+        AppendTarget(sb, request.TargetCompany, request.TargetRoleTitle);
+        AppendRequirements(sb, request.MustHave, request.NiceToHave);
+        AppendFitNotes(sb, request.FitNotes);
+        sb.AppendLine("JOB AD:");
+        sb.AppendLine(request.JobAd.Trim());
+        sb.AppendLine();
+        sb.AppendLine("SOURCE EXPERIENCE (JSON):");
+        sb.AppendLine(SerializeExperiences(request.Experiences));
+        return sb.ToString();
+    }
+
+    private static string BuildTailorPayload(TailorRequest request, IReadOnlyList<CvSourceExperience> selected)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine($"Candidate: {request.FullName} <{request.Email}>");
+        if (!string.IsNullOrWhiteSpace(request.Phone))
+        {
+            sb.AppendLine($"Phone: {request.Phone}");
+        }
+
+        AppendTarget(sb, request.TargetCompany, request.TargetRoleTitle);
+        AppendRequirements(sb, request.MustHave, request.NiceToHave);
+        AppendFitNotes(sb, request.FitNotes);
+        sb.AppendLine("JOB AD:");
+        sb.AppendLine(request.JobAd.Trim());
+        sb.AppendLine();
+        sb.AppendLine("ROLES TO TAILOR (JSON):");
+        sb.AppendLine(SerializeExperiences(selected));
+        return sb.ToString();
+    }
+
+    private static void AppendTarget(StringBuilder sb, string? company, string? roleTitle)
+    {
+        if (!string.IsNullOrWhiteSpace(company))
+        {
+            sb.AppendLine($"Target company: {company.Trim()}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(roleTitle))
+        {
+            sb.AppendLine($"Target role: {roleTitle.Trim()}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(company) || !string.IsNullOrWhiteSpace(roleTitle))
+        {
+            sb.AppendLine();
+        }
+    }
+
+    private static void AppendRequirements(StringBuilder sb, IReadOnlyList<string> mustHave, IReadOnlyList<string> niceToHave)
+    {
+        sb.AppendLine("MUST-HAVE REQUIREMENTS:");
+        sb.AppendLine(JsonSerializer.Serialize(mustHave));
+        sb.AppendLine();
+        sb.AppendLine("NICE-TO-HAVE REQUIREMENTS:");
+        sb.AppendLine(JsonSerializer.Serialize(niceToHave));
+        sb.AppendLine();
+    }
+
+    private static void AppendFitNotes(StringBuilder sb, string? fitNotes)
+    {
+        if (string.IsNullOrWhiteSpace(fitNotes))
+        {
+            return;
+        }
+
+        sb.AppendLine("CANDIDATE NOTES (relevant experience and why the role is a fit):");
+        sb.AppendLine(fitNotes.Trim());
+        sb.AppendLine();
+    }
+
+    private static string SerializeExperiences(IEnumerable<CvSourceExperience> experiences) =>
+        JsonSerializer.Serialize(experiences.Select(experience => new
+        {
+            experience.Id,
+            experience.Company,
+            experience.Title,
+            experience.Location,
+            StartDate = FormatDate(experience.StartDate),
+            EndDate = experience.IsCurrent ? "Present" : FormatDate(experience.EndDate),
+            experience.IsCurrent,
+            experience.EngagementType,
+            Description = Truncate(experience.Description, 700),
+            Skills = experience.Skills
+        }));
+
+    private static List<ExperienceRelevanceScore> AlignScores(
+        IReadOnlyList<CvSourceExperience> sources,
+        IEnumerable<ExperienceRelevanceScore>? items)
+    {
+        var byId = new Dictionary<Guid, double>();
+        foreach (var item in items ?? [])
+        {
+            if (item.Id == Guid.Empty)
+            {
+                continue;
+            }
+
+            byId[item.Id] = Math.Clamp(item.RelevanceScore, 0, 100);
+        }
+
+        return sources.Select(source => new ExperienceRelevanceScore
+        {
+            Id = source.Id,
+            RelevanceScore = byId.TryGetValue(source.Id, out var score) ? score : 40
+        }).ToList();
+    }
+
     private const string CoverageSystemPrompt = """
-        Judge how well each must-have is evidenced by the included experiences and education only.
+        Judge how well each must-have and nice-to-have is evidenced by the included experiences and education only.
         Use covered when a record clearly shows the requirement, partial when the evidence is related but incomplete, and missing when nothing supports it.
         evidence is one short sentence naming the supporting role or education, or why it is missing. Never invent facts.
-        Return one item per requirement, in the same order, copying each requirement exactly.
-        coverage must be covered, partial, or missing.
+        Return one item per requirement, must-haves first then nice-to-haves, copying each requirement exactly.
+        kind must be must or nice. coverage must be covered, partial, or missing.
         Return JSON matching the sample shape exactly.
         """;
 
@@ -79,8 +382,11 @@ public sealed class CvGenerator(ILLMService llm) : ICvGenerator
     {
         _ = cancellationToken;
 
-        var requirements = NormalizeRequirementList(request.MustHave);
-        if (requirements.Count == 0)
+        var mustHave = NormalizeRequirementList(request.MustHave);
+        var niceToHave = NormalizeRequirementList(request.NiceToHave)
+            .Where(item => !mustHave.Contains(item, StringComparer.OrdinalIgnoreCase))
+            .ToList();
+        if (mustHave.Count == 0 && niceToHave.Count == 0)
         {
             return new RequirementCoverageResult();
         }
@@ -92,8 +398,16 @@ public sealed class CvGenerator(ILLMService llm) : ICvGenerator
                 new RequirementCoverageItem
                 {
                     Requirement = "5+ years of C#",
+                    Kind = "must",
                     Coverage = "partial",
                     Evidence = "Senior Engineer at Acme used C#, but the records do not show five years."
+                },
+                new RequirementCoverageItem
+                {
+                    Requirement = "Kubernetes",
+                    Kind = "nice",
+                    Coverage = "missing",
+                    Evidence = "None of the included roles mention Kubernetes."
                 }
             ]
         };
@@ -102,22 +416,41 @@ public sealed class CvGenerator(ILLMService llm) : ICvGenerator
             new InputItem
             {
                 FromUser = true,
-                Text = BuildCoveragePayload(requirements, request)
+                Text = BuildCoveragePayload(mustHave, niceToHave, request)
             }
         };
 
         var result = await llm.GetResponseAsync(sample, CoverageSystemPrompt, history, temperature: 0.1m, maxTokens: 4096, thinkingBudget: 0);
-        result.Items = AlignCoverage(requirements, result.Items);
+        result.Items =
+        [
+            ..TagCoverage(AlignCoverage(mustHave, result.Items, "must"), "must"),
+            ..TagCoverage(AlignCoverage(niceToHave, result.Items, "nice"), "nice")
+        ];
         return result;
     }
 
+    private static List<RequirementCoverageItem> TagCoverage(IEnumerable<RequirementCoverageItem> items, string kind)
+    {
+        var tagged = items.ToList();
+        foreach (var item in tagged)
+        {
+            item.Kind = kind;
+        }
+
+        return tagged;
+    }
+
     private static string BuildCoveragePayload(
-        IReadOnlyList<string> requirements,
+        IReadOnlyList<string> mustHave,
+        IReadOnlyList<string> niceToHave,
         RequirementCoverageRequest request)
     {
         var sb = new StringBuilder();
         sb.AppendLine("MUST-HAVE REQUIREMENTS:");
-        sb.AppendLine(JsonSerializer.Serialize(requirements));
+        sb.AppendLine(JsonSerializer.Serialize(mustHave));
+        sb.AppendLine();
+        sb.AppendLine("NICE-TO-HAVE REQUIREMENTS:");
+        sb.AppendLine(JsonSerializer.Serialize(niceToHave));
         sb.AppendLine();
         sb.AppendLine("INCLUDED EXPERIENCES:");
         sb.AppendLine(JsonSerializer.Serialize(request.Experiences.Select(e => new
@@ -141,12 +474,18 @@ public sealed class CvGenerator(ILLMService llm) : ICvGenerator
 
     private static List<RequirementCoverageItem> AlignCoverage(
         IReadOnlyList<string> requirements,
-        IEnumerable<RequirementCoverageItem>? items)
+        IEnumerable<RequirementCoverageItem>? items,
+        string kind)
     {
-        var returned = (items ?? [])
+        var unused = (items ?? [])
             .Where(item => !string.IsNullOrWhiteSpace(item.Requirement))
+            .Where(item =>
+            {
+                var itemKind = item.Kind?.Trim();
+                return string.IsNullOrEmpty(itemKind)
+                    || string.Equals(itemKind, kind, StringComparison.OrdinalIgnoreCase);
+            })
             .ToList();
-        var unused = new List<RequirementCoverageItem>(returned);
 
         return requirements.Select(requirement =>
         {
@@ -156,10 +495,14 @@ public sealed class CvGenerator(ILLMService llm) : ICvGenerator
             {
                 unused.Remove(match);
             }
-            else if (unused.Count > 0)
+            else
             {
-                match = unused[0];
-                unused.RemoveAt(0);
+                match = unused.FirstOrDefault(item =>
+                    string.Equals(item.Kind?.Trim(), kind, StringComparison.OrdinalIgnoreCase));
+                if (match is not null)
+                {
+                    unused.Remove(match);
+                }
             }
 
             return new RequirementCoverageItem
@@ -210,6 +553,7 @@ public sealed class CvGenerator(ILLMService llm) : ICvGenerator
     private const string SummarySystemPrompt = """
         Write a short professional summary from the included roles, skills, and requirements only. Never invent facts.
         Prefer concrete strengths that match must-have and nice-to-have requirements. No generic filler or superlatives.
+        When candidate notes are included, reflect them only where the included roles support them.
         Return JSON matching the sample shape exactly.
         """;
 
@@ -220,7 +564,8 @@ public sealed class CvGenerator(ILLMService llm) : ICvGenerator
         string? targetRoleTitle,
         IReadOnlyList<string> mustHave,
         IReadOnlyList<string> niceToHave,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? fitNotes = null)
     {
         _ = cancellationToken;
 
@@ -233,7 +578,7 @@ public sealed class CvGenerator(ILLMService llm) : ICvGenerator
             new InputItem
             {
                 FromUser = true,
-                Text = BuildSummaryPayload(request, draft, targetCompany, targetRoleTitle, mustHave, niceToHave)
+                Text = BuildSummaryPayload(request, draft, targetCompany, targetRoleTitle, mustHave, niceToHave, fitNotes)
             }
         };
 
@@ -254,7 +599,8 @@ public sealed class CvGenerator(ILLMService llm) : ICvGenerator
         string? targetCompany,
         string? targetRoleTitle,
         IReadOnlyList<string> mustHave,
-        IReadOnlyList<string> niceToHave)
+        IReadOnlyList<string> niceToHave,
+        string? fitNotes = null)
     {
         var included = draft.Experiences
             .Where(e => e.Include)
@@ -285,6 +631,13 @@ public sealed class CvGenerator(ILLMService llm) : ICvGenerator
         sb.AppendLine("NICE-TO-HAVE REQUIREMENTS:");
         sb.AppendLine(JsonSerializer.Serialize(niceToHave));
         sb.AppendLine();
+        if (!string.IsNullOrWhiteSpace(fitNotes))
+        {
+            sb.AppendLine("CANDIDATE NOTES (emphasise only when the included roles support them):");
+            sb.AppendLine(fitNotes.Trim());
+            sb.AppendLine();
+        }
+
         sb.AppendLine("JOB AD:");
         sb.AppendLine(request.JobAd.Trim());
         sb.AppendLine();
@@ -702,16 +1055,14 @@ public sealed class CvGenerator(ILLMService llm) : ICvGenerator
             .Take(20)
             .ToList();
 
-    private const double MinIncludedRelevance = 70;
-
     /// <summary>
-    /// Hides roles the model scored below 70. Overlaps and higher scores stay included for the user to edit.
+    /// Hides roles the model scored below the include cutoff. Higher scores stay included for the user to edit.
     /// </summary>
     private static void ApplyRelevanceCutoff(List<CvDraftExperience> experiences)
     {
         foreach (var experience in experiences)
         {
-            experience.Include = experience.RelevanceScore >= MinIncludedRelevance;
+            experience.Include = experience.RelevanceScore >= CvRelevance.IncludeCutoff;
         }
     }
 

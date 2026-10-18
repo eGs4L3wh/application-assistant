@@ -317,7 +317,8 @@ export function ExperienceTimeline({
             All roles · {includedCount} included on CV
             {overlapIds.size > 0 ? ` · ${overlapIds.size} overlapping` : ""}
             {isScrollable ? " · scroll to see full career" : ""}
-            {editable ? " · toggle include · drag bar ends · click a bar to edit" : ""}
+            {editable ? " · toggle include · drag bar ends" : ""}
+            {editable && selectable ? " · click a bar to edit" : ""}
           </p>
         </div>
       </div>

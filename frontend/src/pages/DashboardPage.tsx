@@ -131,8 +131,8 @@ export default function DashboardPage() {
         >
           <span className="action-title">Start a new application</span>
           <span className="action-copy">
-            Paste a job ad, review the tailored draft, then download your CV. Uses 1 credit ({credits}{" "}
-            left).
+            Paste a job ad, confirm the requirements, pick the roles to include, then download your CV.
+            Uses 1 credit ({credits} left).
           </span>
           <span className="btn btn-primary">Start</span>
         </button>

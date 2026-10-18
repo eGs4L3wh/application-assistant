@@ -9,4 +9,6 @@ public record UpdateApplicationRequest(
     string? Summary,
     List<string>? Skills,
     List<DraftExperienceUpdate>? Experiences,
-    List<DraftEducationUpdate>? Education);
+    List<DraftEducationUpdate>? Education,
+    string? WizardStep = null,
+    string? FitNotes = null);

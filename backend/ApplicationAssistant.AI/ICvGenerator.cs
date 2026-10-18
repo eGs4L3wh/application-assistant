@@ -2,9 +2,19 @@ using System.Text.Json.Serialization;
 
 namespace ApplicationAssistant.AI;
 
+public static class CvRelevance
+{
+    /// <summary>Roles scored at or above this start out included on the CV.</summary>
+    public const double IncludeCutoff = 70;
+}
+
 public interface ICvGenerator
 {
     Task<JobAdMetadata> ExtractJobMetadataAsync(string jobAd, CancellationToken cancellationToken = default);
+    Task<RelevanceScoreResult> ScoreRelevanceAsync(
+        RelevanceScoreRequest request,
+        CancellationToken cancellationToken = default);
+    Task<CvDraft> TailorAsync(TailorRequest request, CancellationToken cancellationToken = default);
     Task<CvDraft> GenerateAsync(CvGenerationRequest request, CancellationToken cancellationToken = default);
     Task<ExperienceRefineResult> RefineExperienceAsync(
         ExperienceRefineRequest request,
@@ -25,6 +35,7 @@ public sealed class JobAdMetadata
 public sealed class RequirementCoverageRequest
 {
     public required IReadOnlyList<string> MustHave { get; init; }
+    public IReadOnlyList<string> NiceToHave { get; init; } = [];
     public required IReadOnlyList<CoverageExperience> Experiences { get; init; }
     public required IReadOnlyList<CoverageEducation> Education { get; init; }
 }
@@ -53,6 +64,8 @@ public sealed class RequirementCoverageResult
 public sealed class RequirementCoverageItem
 {
     public string Requirement { get; set; } = string.Empty;
+    /// <summary>must or nice. Empty when the model omits it.</summary>
+    public string Kind { get; set; } = string.Empty;
     public string Coverage { get; set; } = "missing";
     public string Evidence { get; set; } = string.Empty;
 }
@@ -73,6 +86,58 @@ public sealed class ExperienceRefineRequest
 public sealed class ExperienceRefineResult
 {
     public string Description { get; set; } = string.Empty;
+}
+
+public sealed class RelevanceScoreRequest
+{
+    public required string JobAd { get; init; }
+    public string? FitNotes { get; init; }
+    public string? TargetCompany { get; init; }
+    public string? TargetRoleTitle { get; init; }
+    public required IReadOnlyList<string> MustHave { get; init; }
+    public required IReadOnlyList<string> NiceToHave { get; init; }
+    public required IReadOnlyList<CvSourceExperience> Experiences { get; init; }
+}
+
+public sealed class RelevanceScoreResult
+{
+    public List<ExperienceRelevanceScore> Experiences { get; set; } = [];
+}
+
+public sealed class ExperienceRelevanceScore
+{
+    public Guid Id { get; set; }
+    public double RelevanceScore { get; set; }
+}
+
+public sealed class TailorRequest
+{
+    public required string JobAd { get; init; }
+    public string? TargetCompany { get; init; }
+    public string? TargetRoleTitle { get; init; }
+    public string? FitNotes { get; init; }
+    public required IReadOnlyList<string> MustHave { get; init; }
+    public required IReadOnlyList<string> NiceToHave { get; init; }
+    public required string FullName { get; init; }
+    public required string Email { get; init; }
+    public string? Phone { get; init; }
+    public required IReadOnlyList<CvSourceExperience> Experiences { get; init; }
+    public required IReadOnlyList<Guid> SelectedExperienceIds { get; init; }
+    public required IReadOnlyList<CvSourceEducation> Education { get; init; }
+}
+
+public sealed class TailoredRolesDraft
+{
+    public List<string> Skills { get; set; } = [];
+    public List<TailoredRole> Experiences { get; set; } = [];
+}
+
+public sealed class TailoredRole
+{
+    public Guid Id { get; set; }
+    public string Title { get; set; } = string.Empty;
+    public string? Description { get; set; }
+    public List<string> Skills { get; set; } = [];
 }
 
 public sealed class CvGenerationRequest
