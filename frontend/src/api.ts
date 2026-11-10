@@ -126,6 +126,13 @@ export type Profile = {
   education: EducationRecord[];
 };
 
+export type ApplicationExperienceSnippet = {
+  company?: string;
+  title?: string;
+  description?: string | null;
+  skills?: string[];
+};
+
 export type ApplicationItem = {
   id: string;
   company: string;
@@ -137,6 +144,7 @@ export type ApplicationItem = {
   hasGeneratedCv?: boolean;
   createdAt: string;
   updatedAt: string;
+  experienceSnippets?: ApplicationExperienceSnippet[];
 };
 
 export type DraftExperience = {

@@ -236,10 +236,43 @@ textarea {
 
 .dash-header {
   display: flex;
-  align-items: start;
+  flex-wrap: wrap;
+  align-items: center;
   justify-content: space-between;
   gap: 1rem;
   animation: rise 420ms ease both;
+}
+
+.app-search {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: min(24rem, 100%);
+}
+
+.dash-header .app-search {
+  flex: 1 1 16rem;
+  max-width: 24rem;
+  margin-left: auto;
+}
+
+.app-search input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0.45rem 0.9rem;
+  background: rgba(255, 252, 247, 0.8);
+  color: var(--ink);
+}
+
+.app-search input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.search-count {
+  margin: -0.35rem 0 0.85rem;
 }
 
 .hero-actions {
@@ -467,6 +500,32 @@ textarea {
   overflow: hidden;
 }
 
+.search-hits {
+  list-style: none;
+  margin: 0.45rem 0 0;
+  padding: 0;
+  display: grid;
+  gap: 0.45rem;
+}
+
+.search-hit-label {
+  display: block;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.search-hit-snippet {
+  color: var(--ink);
+  font-size: 0.92rem;
+}
+
+.search-hit-snippet mark {
+  background: rgba(196, 132, 74, 0.35);
+  color: inherit;
+  padding: 0 0.12em;
+  border-radius: 0.2em;
+}
+
 .list li:last-child {
   border-bottom: 0;
   padding-bottom: 0;
@@ -652,25 +711,9 @@ textarea {
   box-sizing: border-box;
 }
 
-.app-page-with-actions {
-  height: 100vh;
-  max-height: 100vh;
-  overflow: hidden;
-  padding-bottom: 1rem;
-}
-
 .app-page > .dash-header,
 .app-page > .banner {
   flex-shrink: 0;
-}
-
-.app-page-main {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-  display: grid;
-  gap: 1.25rem;
-  padding-right: 0.15rem;
 }
 
 .app-page-header-actions {

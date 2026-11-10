@@ -106,7 +106,7 @@ export function ApplicationWizard({
   onContinue,
   onBack
 }: ApplicationWizardProps) {
-  const roles = [...(draft?.experiences ?? [])].sort(byRelevance);
+  const roles = [...(draft?.experiences ?? [])].sort(byStartDate);
   const selectedCount = roles.filter((role) => selectedIds.includes(role.id)).length;
   const continueDisabled =
     busy !== null ||
@@ -203,8 +203,10 @@ export function ApplicationWizard({
             </div>
             <p className="wizard-lead muted">
               {descriptionsReady
-                ? "This selection already has tailored titles and descriptions. Continue to review them, or change the selection to write them again."
-                : `Scores of ${RELEVANCE_CUTOFF} and above start selected. Uncheck anything that shouldn't be on this CV. Titles and descriptions are written in the next step.`}
+                ? "This selection already has tailored titles and descriptions. Continue to review them."
+                : draft.descriptionsWritten
+                  ? "Roles already written keep their titles and descriptions. Continue to write only the roles you just added."
+                  : `Scores of ${RELEVANCE_CUTOFF} and above start selected. Uncheck anything that shouldn't be on this CV. Titles and descriptions are written in the next step.`}
             </p>
             {roles.length === 0 ? (
               <p className="muted">Your profile has no roles. Continue to write the summary from your education.</p>
@@ -268,7 +270,11 @@ export function ApplicationWizard({
             {busy === "tailor" && (
               <Busy
                 title="Writing descriptions…"
-                detail="Tailoring titles and bullets for the roles you picked."
+                detail={
+                  draft.descriptionsWritten
+                    ? "Writing titles and bullets for the roles you added."
+                    : "Tailoring titles and bullets for the roles you picked."
+                }
               />
             )}
           </>
@@ -343,9 +349,14 @@ function Busy({ title, detail }: { title: string; detail: string }) {
   );
 }
 
-function byRelevance(a: DraftExperience, b: DraftExperience) {
-  if (b.relevanceScore !== a.relevanceScore) return b.relevanceScore - a.relevanceScore;
-  return (b.startDate ?? "").localeCompare(a.startDate ?? "");
+function byStartDate(a: DraftExperience, b: DraftExperience) {
+  return startMs(b.startDate) - startMs(a.startDate);
+}
+
+function startMs(value?: string | null) {
+  if (!value) return 0;
+  const time = Date.parse(value);
+  return Number.isNaN(time) ? 0 : time;
 }
 
 function roleSnippet(description?: string | null) {

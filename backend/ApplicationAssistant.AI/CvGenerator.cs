@@ -112,28 +112,33 @@ public sealed class CvGenerator(ILLMService llm) : ICvGenerator
 
     private const string TailorSystemPrompt = """
         Tailor the selected CV roles to the target job using ONLY the source experience. Never invent facts.
+        Rewrite only the roles in ROLES TO TAILOR. Never return roles listed as already tailored.
         Preserve every experience Id exactly. Keep real employer names. Amend titles only when the source truthfully supports the ad's wording.
         Drop generic filler, soft-skill padding, and job-description language. Focus on concrete achievements, ownership, scale, technical decisions, and measurable outcomes that match the must-have and nice-to-have requirements.
         When the candidate notes are supported by the source, emphasise those points.
         For each role, write Description as bullet points: one achievement or significant aspect per bullet, each on its own line starting with "- ".
         Put the strongest requirement matches first. Use present tense for current roles, past tense for past roles. No first person. No superlatives.
-        skills on each role, and the top-level skills list, should be short tags evidenced in the source, preferring requirement matches. Top-level skills is the CV skill list, at most 12 tags.
+        skills on each role, and the top-level skills list, should be short tags evidenced in the source, preferring requirement matches. Top-level skills is the CV skill list for every included role, including ones already tailored, at most 12 tags.
         Return JSON matching the sample shape exactly.
         """;
 
     public async Task<CvDraft> TailorAsync(TailorRequest request, CancellationToken cancellationToken = default)
     {
         var selectedIds = request.SelectedExperienceIds.ToHashSet();
-        var selected = request.Experiences.Where(experience => selectedIds.Contains(experience.Id)).ToList();
+        var preservedIds = request.PreservedExperienceIds.Where(selectedIds.Contains).ToHashSet();
+        var toTailor = request.Experiences
+            .Where(experience => selectedIds.Contains(experience.Id) && !preservedIds.Contains(experience.Id))
+            .ToList();
+        var preserved = request.Experiences.Where(experience => preservedIds.Contains(experience.Id)).ToList();
         var tailoredById = new Dictionary<Guid, TailoredRole>();
-        var skills = new List<string>();
+        var skills = NormalizeSkills(request.ExistingSkills).Take(12).ToList();
 
-        if (selected.Count > 0)
+        if (toTailor.Count > 0)
         {
             var sample = new TailoredRolesDraft
             {
                 Skills = ["C#", "APIs"],
-                Experiences = selected.Select(experience => new TailoredRole
+                Experiences = toTailor.Select(experience => new TailoredRole
                 {
                     Id = experience.Id,
                     Title = string.IsNullOrWhiteSpace(experience.Title) ? "Software Engineer" : experience.Title,
@@ -149,7 +154,7 @@ public sealed class CvGenerator(ILLMService llm) : ICvGenerator
                 new InputItem
                 {
                     FromUser = true,
-                    Text = BuildTailorPayload(request, selected)
+                    Text = BuildTailorPayload(request, toTailor, preserved)
                 }
             };
 
@@ -163,7 +168,7 @@ public sealed class CvGenerator(ILLMService llm) : ICvGenerator
 
             foreach (var role in tailored.Experiences ?? [])
             {
-                if (role.Id != Guid.Empty && selectedIds.Contains(role.Id))
+                if (role.Id != Guid.Empty && selectedIds.Contains(role.Id) && !preservedIds.Contains(role.Id))
                 {
                     tailoredById[role.Id] = role;
                 }
@@ -270,7 +275,10 @@ public sealed class CvGenerator(ILLMService llm) : ICvGenerator
         return sb.ToString();
     }
 
-    private static string BuildTailorPayload(TailorRequest request, IReadOnlyList<CvSourceExperience> selected)
+    private static string BuildTailorPayload(
+        TailorRequest request,
+        IReadOnlyList<CvSourceExperience> toTailor,
+        IReadOnlyList<CvSourceExperience> preserved)
     {
         var sb = new StringBuilder();
         sb.AppendLine($"Candidate: {request.FullName} <{request.Email}>");
@@ -285,8 +293,15 @@ public sealed class CvGenerator(ILLMService llm) : ICvGenerator
         sb.AppendLine("JOB AD:");
         sb.AppendLine(request.JobAd.Trim());
         sb.AppendLine();
+        if (preserved.Count > 0)
+        {
+            sb.AppendLine("ALREADY TAILORED ROLES (do not rewrite):");
+            sb.AppendLine(SerializeExperiences(preserved));
+            sb.AppendLine();
+        }
+
         sb.AppendLine("ROLES TO TAILOR (JSON):");
-        sb.AppendLine(SerializeExperiences(selected));
+        sb.AppendLine(SerializeExperiences(toTailor));
         return sb.ToString();
     }
 

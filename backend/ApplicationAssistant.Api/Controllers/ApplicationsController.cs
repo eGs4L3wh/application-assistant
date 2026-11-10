@@ -221,7 +221,14 @@ public class ApplicationsController(MongoDbContext db, ICvGenerator cvGenerator,
             .Where(experienceId => application.DraftExperiences.Any(experience => experience.Id == experienceId))
             .Distinct()
             .ToList();
-        var sources = ResolveSources(application, user);
+        var previouslyTailored = application.DescriptionsWritten
+            ? (application.TailoredExperienceIds ?? []).ToHashSet()
+            : new HashSet<Guid>();
+        var preserved = selected.Where(previouslyTailored.Contains).ToHashSet();
+        var draftById = application.DraftExperiences.ToDictionary(experience => experience.Id);
+        var sources = ResolveSources(application, user)
+            .Select(source => PreserveTailoredText(source, preserved, draftById))
+            .ToList();
         var fullName = string.IsNullOrWhiteSpace(user.DisplayName) ? user.Email : user.DisplayName;
         var draft = await cvGenerator.TailorAsync(new TailorRequest
         {
@@ -236,26 +243,37 @@ public class ApplicationsController(MongoDbContext db, ICvGenerator cvGenerator,
             Phone = string.IsNullOrWhiteSpace(user.Phone) ? null : user.Phone.Trim(),
             Experiences = sources,
             SelectedExperienceIds = selected,
+            PreservedExperienceIds = preserved.ToList(),
+            ExistingSkills = application.Skills ?? [],
             Education = application.DraftEducation.Select(ToSourceEducationFromDraft).ToList()
         }, ct);
 
         var tailoredById = draft.Experiences.ToDictionary(experience => experience.Id);
+        var selectedIds = selected.ToHashSet();
         foreach (var experience in application.DraftExperiences)
         {
-            if (!tailoredById.TryGetValue(experience.Id, out var tailored))
+            var include = selectedIds.Contains(experience.Id);
+            experience.Include = include;
+            if (!include || preserved.Contains(experience.Id))
             {
-                experience.Include = false;
                 continue;
             }
 
-            experience.Include = tailored.Include;
+            if (!tailoredById.TryGetValue(experience.Id, out var tailored))
+            {
+                continue;
+            }
+
             experience.Title = string.IsNullOrWhiteSpace(tailored.Title) ? experience.Title : tailored.Title;
             experience.Description = tailored.Description;
             experience.Skills = NormalizeSkills(tailored.Skills);
         }
 
         application.Summary = draft.Summary;
-        application.Skills = draft.Skills ?? [];
+        if (selected.Any(id => !preserved.Contains(id)))
+        {
+            application.Skills = draft.Skills ?? [];
+        }
         application.WizardStep = "review";
         application.WizardReached = "review";
         application.DescriptionsWritten = true;
@@ -688,7 +706,16 @@ public class ApplicationsController(MongoDbContext db, ICvGenerator cvGenerator,
             a.CvFileName,
             HasGeneratedCv = a.GeneratedCvContent is { Length: > 0 },
             a.CreatedAt,
-            a.UpdatedAt
+            a.UpdatedAt,
+            ExperienceSnippets = a.DraftExperiences
+                .Where(e => e.Include)
+                .Select(e => new
+                {
+                    e.Company,
+                    e.Title,
+                    e.Description,
+                    e.Skills
+                })
         }));
     }
 
@@ -873,6 +900,31 @@ public class ApplicationsController(MongoDbContext db, ICvGenerator cvGenerator,
         EndDate = education.EndDate,
         Description = education.Description
     };
+
+    private static CvSourceExperience PreserveTailoredText(
+        CvSourceExperience source,
+        HashSet<Guid> preserved,
+        IReadOnlyDictionary<Guid, ApplicationDraftExperience> draftById)
+    {
+        if (!preserved.Contains(source.Id) || !draftById.TryGetValue(source.Id, out var current))
+        {
+            return source;
+        }
+
+        return new CvSourceExperience
+        {
+            Id = source.Id,
+            Company = current.Company,
+            Title = current.Title,
+            Location = current.Location,
+            StartDate = current.StartDate,
+            EndDate = current.EndDate,
+            IsCurrent = current.IsCurrent,
+            EngagementType = EngagementType.Normalize(current.EngagementType),
+            Description = current.Description,
+            Skills = current.Skills ?? []
+        };
+    }
 
     private static List<CvSourceExperience> ResolveSources(JobApplication application, AppUser user)
     {

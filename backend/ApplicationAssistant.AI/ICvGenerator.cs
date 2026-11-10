@@ -123,6 +123,9 @@ public sealed class TailorRequest
     public string? Phone { get; init; }
     public required IReadOnlyList<CvSourceExperience> Experiences { get; init; }
     public required IReadOnlyList<Guid> SelectedExperienceIds { get; init; }
+    /// <summary>Selected roles whose current title and description must be kept.</summary>
+    public IReadOnlyList<Guid> PreservedExperienceIds { get; init; } = [];
+    public IReadOnlyList<string> ExistingSkills { get; init; } = [];
     public required IReadOnlyList<CvSourceEducation> Education { get; init; }
 }
 

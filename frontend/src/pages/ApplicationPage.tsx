@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, type ApplicationDetail, type DraftExperience, type RequirementCoverage } from "../api";
 import {
@@ -10,6 +10,7 @@ import {
   type WizardBusy,
   type WizardStepId
 } from "../components/ApplicationWizard";
+import { SkillTagsField } from "../components/SkillTagsField";
 import { formatDateRange } from "../lib/dates";
 import { downloadBlob } from "../lib/download";
 import { useAuth } from "../auth/AuthContext";
@@ -133,6 +134,10 @@ export default function ApplicationPage() {
   useEffect(() => {
     setFitNotes(draft?.fitNotes ?? "");
   }, [draft?.id, draft?.fitNotes]);
+
+  useLayoutEffect(() => {
+    window.scrollTo(0, 0);
+  }, [id, draft?.wizardStep]);
 
   useEffect(() => {
     if (!draft || draft.wizardStep !== "roles") return;
@@ -336,6 +341,14 @@ export default function ApplicationPage() {
     }
   }
 
+  function updateDraftSkills(skills: string[]) {
+    setDraft((current) => (current ? { ...current, skills } : current));
+  }
+
+  function updateDraftSummary(summary: string) {
+    setDraft((current) => (current ? { ...current, summary } : current));
+  }
+
   function updateDraftExperience(experienceId: string, patch: Partial<DraftExperience>) {
     setCoverage(null);
     setDraft((current) => {
@@ -460,11 +473,8 @@ export default function ApplicationPage() {
     }
   }
 
-  const pinReviewActions =
-    Boolean(draft) && !isNew && !loading && !isOpenWizardStep(draft?.wizardStep);
-
   return (
-    <div className={`app-page${pinReviewActions ? " app-page-with-actions" : ""}`}>
+    <div className="app-page">
       <header className="dash-header">
         <div>
           <p className="brand">Application Assistant</p>
@@ -521,58 +531,74 @@ export default function ApplicationPage() {
         </section>
       ) : (
         <>
-          <div className="app-page-main">
-            <WizardStepper
-              current="review"
-              busy={wizardBusy !== null || savingDraft || finalizing}
-              isStepEnabled={isWizardStepEnabled}
-              onOpen={(target) => void onWizardOpen(target)}
-            />
-            <header className="app-page-title">
-              <div>
-                <h1>{draft.roleTitle || "Untitled role"}</h1>
-                <p className="muted">
-                  {draft.company || "Unknown company"}
-                  {draft.status ? ` · ${draft.status}` : ""}
-                </p>
-              </div>
-            </header>
+          <WizardStepper
+            current="review"
+            busy={wizardBusy !== null || savingDraft || finalizing}
+            isStepEnabled={isWizardStepEnabled}
+            onOpen={(target) => void onWizardOpen(target)}
+          />
+          <header className="app-page-title">
+            <div>
+              <h1>{draft.roleTitle || "Untitled role"}</h1>
+              <p className="muted">
+                {draft.company || "Unknown company"}
+                {draft.status ? ` · ${draft.status}` : ""}
+              </p>
+            </div>
+          </header>
 
-            <section className="panel app-page-panel">
-              <div className="panel-header">
-                <h2>Requirements</h2>
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-small"
-                  disabled={
-                    checkingCoverage ||
-                    ((draft.mustHave ?? []).length === 0 && (draft.niceToHave ?? []).length === 0)
-                  }
-                  onClick={() => void onCheckCoverage()}
-                >
-                  {checkingCoverage ? "Checking…" : "Check coverage"}
-                </button>
-              </div>
-              <div className="req-grid">
-                <RequirementColumn
-                  title="Must have"
-                  mark="req-mark-must"
-                  items={draft.mustHave ?? []}
-                  coverage={coverage?.filter((item) => item.kind !== "nice") ?? null}
-                />
-                <RequirementColumn
-                  title="Nice to have"
-                  mark="req-mark-nice"
-                  items={draft.niceToHave ?? []}
-                  coverage={coverage?.filter((item) => item.kind === "nice") ?? null}
-                />
-              </div>
+          <section className="panel app-page-panel">
+            <div className="panel-header">
+              <h2>Requirements</h2>
+              <button
+                type="button"
+                className="btn btn-ghost btn-small"
+                disabled={
+                  checkingCoverage ||
+                  ((draft.mustHave ?? []).length === 0 && (draft.niceToHave ?? []).length === 0)
+                }
+                onClick={() => void onCheckCoverage()}
+              >
+                {checkingCoverage ? "Checking…" : "Check coverage"}
+              </button>
+            </div>
+            <div className="req-grid">
+              <RequirementColumn
+                title="Must have"
+                mark="req-mark-must"
+                items={draft.mustHave ?? []}
+                coverage={coverage?.filter((item) => item.kind !== "nice") ?? null}
+              />
+              <RequirementColumn
+                title="Nice to have"
+                mark="req-mark-nice"
+                items={draft.niceToHave ?? []}
+                coverage={coverage?.filter((item) => item.kind === "nice") ?? null}
+              />
+            </div>
+          </section>
+
+          <section className="panel app-page-panel form">
+            <h2>Summary</h2>
+            <p className="muted">The intro at the top of the CV.</p>
+            <textarea
+              aria-label="Summary"
+              value={draft.summary ?? ""}
+              onChange={(e) => updateDraftSummary(e.target.value)}
+              rows={4}
+            />
+          </section>
+
+          <section className="panel app-page-panel">
+              <h2>Skills</h2>
+              <p className="muted">These appear in the skills section of the CV.</p>
+              <SkillTagsField value={draft.skills ?? []} onChange={updateDraftSkills} />
             </section>
 
             <section className="panel app-page-panel form">
               <h2>Experience</h2>
               <p className="muted">
-                Titles and descriptions written for the roles you included. Edit them before generating the CV.
+                Titles, skills, and descriptions written for the roles you included. Edit them before generating the CV.
               </p>
               <ul className="draft-list">
                   {draft.experiences.filter((exp) => exp.include).length === 0 ? (
@@ -655,11 +681,14 @@ export default function ApplicationPage() {
                           </div>
                         )}
                       </div>
+                      <SkillTagsField
+                        value={exp.skills ?? []}
+                        onChange={(skills) => updateDraftExperience(exp.id, { skills })}
+                      />
                     </li>
                   ))}
                 </ul>
             </section>
-          </div>
 
           <div className="app-page-actions">
             <div className="app-page-actions-start">

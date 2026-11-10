@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api, type ApplicationItem } from "../api";
 import { useAuth } from "../auth/AuthContext";
+import ApplicationList from "../components/ApplicationList";
+import ApplicationSearchForm from "../components/ApplicationSearchForm";
 import { downloadBlob } from "../lib/download";
 
 const RECENT_APPLICATION_LIMIT = 3;
@@ -85,6 +87,7 @@ export default function DashboardPage() {
           <p className="brand">Application Assistant</p>
           <p className="muted">Signed in as {user?.name ?? user?.email}</p>
         </div>
+        <ApplicationSearchForm />
         <div className="app-page-header-actions">
           <Link to="/profile" className="btn btn-ghost btn-small">
             Profile
@@ -141,48 +144,12 @@ export default function DashboardPage() {
       {loadedOnce && applications.length > 0 && (
         <section className="panel">
           <h2>Recent applications</h2>
-          <ul className="list">
-            {visibleApplications.map((app) => (
-              <li key={app.id}>
-                <div className="list-row">
-                  <strong>
-                    {app.roleTitle} · {app.company}
-                  </strong>
-                  <div className="list-actions">
-                    {app.hasGeneratedCv && (
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-small"
-                        onClick={() => void onDownloadApplicationCv(app.id, app.cvFileName)}
-                      >
-                        Download CV
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-small"
-                      onClick={() => navigate(`/applications/${app.id}`)}
-                    >
-                      Open
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-small"
-                      onClick={() => void onDeleteApplication(app.id)}
-                    >
-                      Delete
-                    </button>
-                  </div>
-                </div>
-                <span className="muted">
-                  {app.status}
-                  {app.cvFileName ? ` · ${app.cvFileName}` : ""} ·{" "}
-                  {new Date(app.updatedAt).toLocaleDateString()}
-                </span>
-                {app.notes?.trim() ? <span className="list-detail list-notes">{app.notes}</span> : null}
-              </li>
-            ))}
-          </ul>
+          <ApplicationList
+            applications={visibleApplications}
+            onOpen={(id) => navigate(`/applications/${id}`)}
+            onDownload={(id, savedName) => void onDownloadApplicationCv(id, savedName)}
+            onDelete={(id) => void onDeleteApplication(id)}
+          />
           {hasMoreApplications && (
             <div className="see-more">
               <button
